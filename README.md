@@ -1,7 +1,7 @@
 # saleor-multi-vendor
 Multi Vendor Plugin for Saleor e-Commerce
 
-Use issues to get an invite.
+Use issues to get an invite. [Live Chat at Gitter](https://gitter.im/Saleor-Multi-Vendor/community)
 
 Short Analysis:
 
