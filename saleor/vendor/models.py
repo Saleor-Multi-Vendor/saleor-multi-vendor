@@ -1,3 +1,4 @@
+from saleor.core.permissions import VendorPermissions
 from django.conf import settings
 from django.db import models
 
@@ -32,9 +33,14 @@ class Vendor(models.Model):
 
     class Meta:
         """Meta definition for Vendor."""
-
         verbose_name = "Vendor"
         verbose_name_plural = "Vendors"
+        permissions = (
+            (
+                VendorPermissions.MANAGE_VENDOR.codename,
+                "Manage Vendor.",
+            ),
+        )
 
     def __str__(self):
         """Unicode representation of Vendor."""
