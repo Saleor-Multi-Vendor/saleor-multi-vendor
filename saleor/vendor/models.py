@@ -1,6 +1,7 @@
-from saleor.core.permissions import VendorPermissions
 from django.conf import settings
 from django.db import models
+
+from saleor.core.permissions import VendorPermissions
 
 # Create your models here.
 from ..warehouse.models import Allocation, Warehouse
@@ -14,7 +15,7 @@ class Vendor(models.Model):
         settings.AUTH_USER_MODEL,
         blank=True,
         null=True,
-        related_name="vendor",
+        related_name="vendor_user",
         on_delete=models.CASCADE,
     )
     # here the ideas clash
@@ -22,17 +23,18 @@ class Vendor(models.Model):
     # so either I make vendor foreign key in warehouse
     # or here is a dirty little trick to make manytomany
     # into one to many
-    warehouse = models.ManyToManyField(Warehouse, related_name="vendors")
-    allocation = models.ManyToManyField(Allocation, related_name="vendors")
+
+    allocation = models.ManyToManyField(Allocation, related_name="vendor_allocation")
     shop_name = models.CharField(max_length=256)
 
-    def save(self, *args, **kwargs):
-        if Vendor.objects.get(warehouse=self.warehouse):
-            raise Exception("This number has been used.")
-            return super(Vendor, self).save(*args, **kwargs)
+    # def save(self, *args, **kwargs):
+    #     if Vendor.objects.get(warehouse=self.warehouse):
+    #         raise Exception("This number has been used.")
+    #         return super(Vendor, self).save(*args, **kwargs)
 
     class Meta:
         """Meta definition for Vendor."""
+
         verbose_name = "Vendor"
         verbose_name_plural = "Vendors"
         permissions = (
@@ -44,4 +46,20 @@ class Vendor(models.Model):
 
     def __str__(self):
         """Unicode representation of Vendor."""
-        return self.vendor_name
+        return self.shop_name
+
+
+class VendorWarehouse(models.Model):
+    vendor_id = models.ForeignKey(
+        Vendor, related_name="vendorware_vendor", on_delete=models.CASCADE
+    )
+    warehouse = models.OneToOneField(
+        Warehouse, related_name="vendor_warehouse", on_delete=models.SET_NULL, null=True
+    )
+
+    class Meta:
+        verbose_name = "VendorWarehouse"
+        verbose_name_plural = "VendorWarehouses"
+
+    def __str__(self):
+        return self.Meta.verbose_name
