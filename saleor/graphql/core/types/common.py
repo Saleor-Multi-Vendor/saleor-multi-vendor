@@ -35,6 +35,7 @@ from ..enums import (
     TranslationErrorCode,
     UploadErrorCode,
     WarehouseErrorCode,
+    VendorErrorCode,
     WebhookErrorCode,
     WeightUnitsEnum,
     WishlistErrorCode,
@@ -325,6 +326,9 @@ class UploadError(Error):
 class WarehouseError(Error):
     code = WarehouseErrorCode(description="The error code.", required=True)
 
+# to handle errors and its response for vendor app
+class VendorError(Error):
+    code = VendorErrorCode(description="The error code.", required=True)
 
 class WebhookError(Error):
     code = WebhookErrorCode(description="The error code.", required=True)

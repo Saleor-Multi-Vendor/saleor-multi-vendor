@@ -2720,6 +2720,7 @@ type Mutation {
   webhookCreate(input: WebhookCreateInput!): WebhookCreate
   webhookDelete(id: ID!): WebhookDelete
   webhookUpdate(id: ID!, input: WebhookUpdateInput!): WebhookUpdate
+  createVendor(input: VendorCreateInput!): VendorCreate
   createWarehouse(input: WarehouseCreateInput!): WarehouseCreate
   updateWarehouse(id: ID!, input: WarehouseUpdateInput!): WarehouseUpdate
   deleteWarehouse(id: ID!): WarehouseDelete
@@ -5748,6 +5749,35 @@ type VariantPricingInfo {
   price: TaxedMoney
   priceUndiscounted: TaxedMoney
   priceLocalCurrency: TaxedMoney
+}
+
+type Vendor implements Node {
+  id: ID!
+  shopName: String!
+}
+
+type VendorCreate {
+  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  errors: [VendorError!]!
+  vendor: Vendor
+}
+
+input VendorCreateInput {
+  shopName: String
+}
+
+type VendorError {
+  field: String
+  message: String
+  code: VendorErrorCode!
+}
+
+enum VendorErrorCode {
+  GRAPHQL_ERROR
+  INVALID
+  NOT_FOUND
+  REQUIRED
+  UNIQUE
 }
 
 type VerifyToken {
