@@ -76,6 +76,10 @@ class SitePermissions(BasePermissionEnum):
     MANAGE_TRANSLATIONS = "site.manage_translations"
 
 
+class VendorPermissions(BasePermissionEnum):
+    MANAGE_VENDOR = "vendor.manage_vendor"
+
+
 PERMISSIONS_ENUMS = [
     AccountPermissions,
     AppPermission,
