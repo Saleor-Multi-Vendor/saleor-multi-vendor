@@ -26,7 +26,7 @@ class Vendor(models.Model):
 
     allocation = models.ManyToManyField(Allocation, related_name="vendor_allocation")
     shop_name = models.CharField(max_length=256)
-
+    slug = models.SlugField(max_length=255, unique=True, allow_unicode=True)
     # def save(self, *args, **kwargs):
     #     if Vendor.objects.get(warehouse=self.warehouse):
     #         raise Exception("This number has been used.")
