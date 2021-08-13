@@ -4,11 +4,11 @@ from ...vendor import models
 
 # Basic input required for vendor
 class VendorInput(graphene.InputObjectType):
-    shop_name = graphene.String(description="Shop Name")
+    slug = graphene.String(decription="Slug")
 
 # More input fields for create required.
 class VendorCreateInput(VendorInput):
-    pass
+    shop_name = graphene.String(description="Shop Name")
 
 # This might be for response is requried 
 class Vendor(CountableDjangoObjectType):
@@ -19,5 +19,6 @@ class Vendor(CountableDjangoObjectType):
         interfaces = [graphene.relay.Node]
         only_fields = [
             "id",
+            "slug",
             "shop_name"
         ]

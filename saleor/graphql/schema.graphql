@@ -5754,6 +5754,7 @@ type VariantPricingInfo {
 type Vendor implements Node {
   id: ID!
   shopName: String!
+  slug: String!
 }
 
 type VendorCreate {
@@ -5763,6 +5764,7 @@ type VendorCreate {
 }
 
 input VendorCreateInput {
+  slug: String
   shopName: String
 }
 
