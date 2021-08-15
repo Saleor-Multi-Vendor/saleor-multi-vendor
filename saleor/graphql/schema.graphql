@@ -202,6 +202,17 @@ type Allocation implements Node {
   warehouse: Warehouse!
 }
 
+type AllocationCountableConnection {
+  pageInfo: PageInfo!
+  edges: [AllocationCountableEdge!]!
+  totalCount: Int
+}
+
+type AllocationCountableEdge {
+  node: Allocation!
+  cursor: String!
+}
+
 type App implements Node & ObjectWithMetadata {
   id: ID!
   name: String
@@ -2720,6 +2731,12 @@ type Mutation {
   webhookCreate(input: WebhookCreateInput!): WebhookCreate
   webhookDelete(id: ID!): WebhookDelete
   webhookUpdate(id: ID!, input: WebhookUpdateInput!): WebhookUpdate
+  createVendorwarehouse(input: VendorWarehouseInput!): VendorWarehouseCreate
+  updateVendorwarehouse(id: ID!, input: VendorWarehouseInput!): VendorWarehouseUpdate
+  deleteVendorwarehouse(id: ID!): VendorWarehouseDelete
+  createVendor(input: VendorCreateInput!): VendorCreate
+  deleteVendor(id: ID!): VendorDelete
+  updateVendor(id: ID!, input: VendorCreateInput!): VendorUpdate
   createWarehouse(input: WarehouseCreateInput!): WarehouseCreate
   updateWarehouse(id: ID!, input: WarehouseUpdateInput!): WarehouseUpdate
   deleteWarehouse(id: ID!): WarehouseDelete
@@ -5748,6 +5765,82 @@ type VariantPricingInfo {
   price: TaxedMoney
   priceUndiscounted: TaxedMoney
   priceLocalCurrency: TaxedMoney
+}
+
+type Vendor implements Node {
+  id: ID!
+  user: User
+  allocation(before: String, after: String, first: Int, last: Int): AllocationCountableConnection!
+  shopName: String!
+  slug: String!
+}
+
+type VendorCreate {
+  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  errors: [VendorError!]!
+  vendor: Vendor
+}
+
+input VendorCreateInput {
+  slug: String
+  shopName: String
+  user: ID
+  allocation: [ID]
+}
+
+type VendorDelete {
+  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  errors: [VendorError!]!
+  vendor: Vendor
+}
+
+type VendorError {
+  field: String
+  message: String
+  code: VendorErrorCode!
+}
+
+enum VendorErrorCode {
+  GRAPHQL_ERROR
+  INVALID
+  NOT_FOUND
+  REQUIRED
+  UNIQUE
+}
+
+type VendorUpdate {
+  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  errors: [VendorError!]!
+  vendor: Vendor
+}
+
+type VendorWarehouse implements Node {
+  id: ID!
+  vendorId: Vendor!
+  warehouse: Warehouse
+}
+
+type VendorWarehouseCreate {
+  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  errors: [VendorError!]!
+  vendorWarehouse: VendorWarehouse
+}
+
+type VendorWarehouseDelete {
+  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  errors: [VendorError!]!
+  vendorWarehouse: VendorWarehouse
+}
+
+input VendorWarehouseInput {
+  vendorId: ID
+  warehouse: ID
+}
+
+type VendorWarehouseUpdate {
+  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  errors: [VendorError!]!
+  vendorWarehouse: VendorWarehouse
 }
 
 type VerifyToken {
