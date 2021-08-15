@@ -1,11 +1,15 @@
-from re import L
 import graphene
-from ..account.i18n import I18nMixin
+from django.core.exceptions import ValidationError
+
 from ...core.permissions import VendorPermissions
+from ..core.utils import validate_slug_and_generate_if_needed
+from ...vendor import models
+from ...vendor.error_codes import VendorErrorCode
+from ..account.i18n import I18nMixin
 from ..core.mutations import ModelDeleteMutation, ModelMutation
 from ..core.types.common import VendorError
 from .types import VendorCreateInput, VendorWarehouseInput
-from ...vendor import models
+
 
 # to create vendor which is registered in schema
 class VendorCreate(ModelMutation, I18nMixin):
@@ -20,6 +24,18 @@ class VendorCreate(ModelMutation, I18nMixin):
         permissions = (VendorPermissions.MANAGE_VENDOR,)
         error_type_class = VendorError
         error_type_field = "vendor_errors"
+    
+    @classmethod
+    def clean_input(cls, info, instance, data):
+        cleaned_input = super().clean_input(info, instance, data)
+        try:
+            cleaned_input = validate_slug_and_generate_if_needed(
+                instance, "shop_name", cleaned_input
+            )
+        except ValidationError as error:
+            error.code = VendorErrorCode.REQUIRED.value
+            raise ValidationError({"slug":error})
+        return cleaned_input
 
 
 class VendorUpdate(VendorCreate):
