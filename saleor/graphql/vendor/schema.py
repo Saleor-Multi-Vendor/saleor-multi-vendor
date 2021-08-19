@@ -1,5 +1,6 @@
 import graphene
 
+from ..core.utils import from_global_id_or_error
 from .filters import VendorFilterInput
 from .mutations import (
     VendorCreate,
@@ -9,6 +10,7 @@ from .mutations import (
     VendorWarehouseDelete,
     VendorWarehouseUpdate,
 )
+from .resolvers import resolve_vendor, resolve_vendors
 from .types import Vendor
 
 
@@ -36,3 +38,11 @@ class VendorQueries(graphene.ObjectType):
     vendors = graphene.Field(
         Vendor, description="List of vendors.", filter=VendorFilterInput()
     )
+
+    def resolve_vendor(self, info, **data):
+        vendor_pk = data.get("id")
+        _, id = from_global_id_or_error(vendor_pk, Vendor)
+        return resolve_vendor(id)
+
+    def resolve_vendors(self, info, **_kwargs):
+        return resolve_vendors()
