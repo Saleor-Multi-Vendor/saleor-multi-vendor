@@ -6,4 +6,4 @@ def resolve_vendor(id):
 
 
 def resolve_vendors():
-    return models.Warehouse.objects.all()
+    return models.Vendor.objects.all()
