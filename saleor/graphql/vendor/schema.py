@@ -1,7 +1,8 @@
 import graphene
 
+from ..core.fields import FilterInputConnectionField
 from ..core.utils import from_global_id_or_error
-from .filters import VendorFilterInput
+from .filters import VendorFilterInput, VendorWarehouseFilterInput
 from .mutations import (
     VendorCreate,
     VendorDelete,
@@ -10,8 +11,14 @@ from .mutations import (
     VendorWarehouseDelete,
     VendorWarehouseUpdate,
 )
-from .resolvers import resolve_vendor, resolve_vendors
-from .types import Vendor
+from .resolvers import (
+    resolve_vendor,
+    resolve_vendor_warehouse,
+    resolve_vendor_warehouses,
+    resolve_vendors,
+)
+from .sorters import VendorSortingInput
+from .types import Vendor, VendorWarehouse
 
 
 # registering the mutaion for schema here which takes automatically when
@@ -35,8 +42,11 @@ class VendorQueries(graphene.ObjectType):
         id=graphene.Argument(graphene.ID, description="ID of a vendor", required=True),
     )
 
-    vendors = graphene.Field(
-        Vendor, description="List of vendors.", filter=VendorFilterInput()
+    vendors = FilterInputConnectionField(
+        Vendor,
+        description="List of vendors.",
+        filter=VendorFilterInput(),
+        sort_by=VendorSortingInput(),
     )
 
     def resolve_vendor(self, info, **data):
@@ -46,3 +56,24 @@ class VendorQueries(graphene.ObjectType):
 
     def resolve_vendors(self, info, **_kwargs):
         return resolve_vendors()
+
+
+class VendorWarehouseQueries(graphene.ObjectType):
+    vendor_warehouse = graphene.Field(
+        VendorWarehouse,
+        description="Look up vendor's warehouse by ID.",
+        id=graphene.ID(required=True, description="ID of a vendor"),
+    )
+    vendor_warehouses = FilterInputConnectionField(
+        Vendor,
+        description="List of vendor warehouses.",
+        filter=VendorWarehouseFilterInput(),
+    )
+
+    def resolve_vendor_warehouse(self, info, **data):
+        vendor_warehouse_id = data.get("id")
+        _, id = from_global_id_or_error(vendor_warehouse_id, VendorWarehouse)
+        return resolve_vendor_warehouse(id)
+
+    def resolve_vendor_warehouses(self, info, **_kwargs):
+        return resolve_vendor_warehouses()
