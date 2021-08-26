@@ -4,12 +4,12 @@ from ..core.types import SortInputObjectType
 
 
 class VendorSortField(graphene.Enum):
-    NAME = ["name", "slug"]
+    NAME = ["shop_name", "slug"]
 
     @property
     def description(self):
-        if self.name in VendorSortField.__enum__.member_names_:
-            sort_name = self.name.lower().replace("_", " ")
+        if self.shop_name in VendorSortField.__enum__.member_names_:
+            sort_name = self.shop_name.lower().replace("_", " ")
             return f"Sort vendors by {sort_name}."
         raise ValueError("Unsupported enum value: %s" % self.value)
 

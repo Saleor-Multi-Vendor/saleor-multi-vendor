@@ -39,7 +39,7 @@ def filter_search_vendor_warehouse(qs, _, value):
 
 class VendorFilter(django_filters.FilterSet):
     search = django_filters.CharFilter(method=filter_search_vendor)
-    id = GlobalIDMultipleChoiceFilter(field_name="id")
+    ids = GlobalIDMultipleChoiceFilter(field_name="id")
 
     class Meta:
         model = Vendor

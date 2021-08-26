@@ -65,7 +65,7 @@ class VendorWarehouseQueries(graphene.ObjectType):
         id=graphene.ID(required=True, description="ID of a vendor"),
     )
     vendor_warehouses = FilterInputConnectionField(
-        Vendor,
+        VendorWarehouse,
         description="List of vendor warehouses.",
         filter=VendorWarehouseFilterInput(),
     )

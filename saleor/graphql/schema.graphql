@@ -4767,7 +4767,7 @@ type Query {
   warehouse(id: ID!): Warehouse
   warehouses(filter: WarehouseFilterInput, sortBy: WarehouseSortingInput, before: String, after: String, first: Int, last: Int): WarehouseCountableConnection
   vendorWarehouse(id: ID!): VendorWarehouse
-  vendorWarehouses(filter: VendorWarehouseFilterInput, before: String, after: String, first: Int, last: Int): VendorCountableConnection
+  vendorWarehouses(filter: VendorWarehouseFilterInput, before: String, after: String, first: Int, last: Int): VendorWarehouseCountableConnection
   vendor(id: ID!): Vendor
   vendors(filter: VendorFilterInput, sortBy: VendorSortingInput, before: String, after: String, first: Int, last: Int): VendorCountableConnection
   translations(kind: TranslatableKinds!, before: String, after: String, first: Int, last: Int): TranslatableItemConnection
@@ -5825,7 +5825,7 @@ enum VendorErrorCode {
 
 input VendorFilterInput {
   search: String
-  id: [ID]
+  ids: [ID]
 }
 
 enum VendorSortField {
@@ -5847,6 +5847,17 @@ type VendorWarehouse implements Node {
   id: ID!
   vendorId: Vendor!
   warehouse: Warehouse
+}
+
+type VendorWarehouseCountableConnection {
+  pageInfo: PageInfo!
+  edges: [VendorWarehouseCountableEdge!]!
+  totalCount: Int
+}
+
+type VendorWarehouseCountableEdge {
+  node: VendorWarehouse!
+  cursor: String!
 }
 
 type VendorWarehouseCreate {
