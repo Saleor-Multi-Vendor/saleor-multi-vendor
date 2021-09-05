@@ -4766,6 +4766,10 @@ type Query {
   webhookSamplePayload(eventType: WebhookSampleEventTypeEnum!): JSONString
   warehouse(id: ID!): Warehouse
   warehouses(filter: WarehouseFilterInput, sortBy: WarehouseSortingInput, before: String, after: String, first: Int, last: Int): WarehouseCountableConnection
+  vendorWarehouse(id: ID!): VendorWarehouse
+  vendorWarehouses(filter: VendorWarehouseFilterInput, before: String, after: String, first: Int, last: Int): VendorWarehouseCountableConnection
+  vendor(id: ID!): Vendor
+  vendors(filter: VendorFilterInput, sortBy: VendorSortingInput, before: String, after: String, first: Int, last: Int): VendorCountableConnection
   translations(kind: TranslatableKinds!, before: String, after: String, first: Int, last: Int): TranslatableItemConnection
   translation(id: ID!, kind: TranslatableKinds!): TranslatableItem
   stock(id: ID!): Stock
@@ -5775,6 +5779,17 @@ type Vendor implements Node {
   slug: String!
 }
 
+type VendorCountableConnection {
+  pageInfo: PageInfo!
+  edges: [VendorCountableEdge!]!
+  totalCount: Int
+}
+
+type VendorCountableEdge {
+  node: Vendor!
+  cursor: String!
+}
+
 type VendorCreate {
   vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
   errors: [VendorError!]!
@@ -5808,6 +5823,20 @@ enum VendorErrorCode {
   UNIQUE
 }
 
+input VendorFilterInput {
+  search: String
+  ids: [ID]
+}
+
+enum VendorSortField {
+  NAME
+}
+
+input VendorSortingInput {
+  direction: OrderDirection!
+  field: VendorSortField!
+}
+
 type VendorUpdate {
   vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
   errors: [VendorError!]!
@@ -5820,6 +5849,17 @@ type VendorWarehouse implements Node {
   warehouse: Warehouse
 }
 
+type VendorWarehouseCountableConnection {
+  pageInfo: PageInfo!
+  edges: [VendorWarehouseCountableEdge!]!
+  totalCount: Int
+}
+
+type VendorWarehouseCountableEdge {
+  node: VendorWarehouse!
+  cursor: String!
+}
+
 type VendorWarehouseCreate {
   vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
   errors: [VendorError!]!
@@ -5830,6 +5870,10 @@ type VendorWarehouseDelete {
   vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
   errors: [VendorError!]!
   vendorWarehouse: VendorWarehouse
+}
+
+input VendorWarehouseFilterInput {
+  search: String
 }
 
 input VendorWarehouseInput {
