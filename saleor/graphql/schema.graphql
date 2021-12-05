@@ -3969,6 +3969,7 @@ enum PermissionEnum {
   MANAGE_SETTINGS
   MANAGE_TRANSLATIONS
   MANAGE_CHECKOUTS
+  MANAGE_VENDOR
 }
 
 type PermissionGroupCreate {
@@ -4325,6 +4326,8 @@ input ProductFilterInput {
   price: PriceRangeInput
   minimalPrice: PriceRangeInput
   productTypes: [ID]
+  vendor: [ID]
+  giftCard: Boolean
   ids: [ID]
   channel: String
 }
@@ -5791,7 +5794,7 @@ type VendorCountableEdge {
 }
 
 type VendorCreate {
-  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  vendorErrors: [VendorError!]! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `errors` field instead.")
   errors: [VendorError!]!
   vendor: Vendor
 }
@@ -5804,7 +5807,7 @@ input VendorCreateInput {
 }
 
 type VendorDelete {
-  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  vendorErrors: [VendorError!]! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `errors` field instead.")
   errors: [VendorError!]!
   vendor: Vendor
 }
@@ -5838,7 +5841,7 @@ input VendorSortingInput {
 }
 
 type VendorUpdate {
-  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  vendorErrors: [VendorError!]! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `errors` field instead.")
   errors: [VendorError!]!
   vendor: Vendor
 }
@@ -5861,13 +5864,13 @@ type VendorWarehouseCountableEdge {
 }
 
 type VendorWarehouseCreate {
-  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  vendorErrors: [VendorError!]! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `errors` field instead.")
   errors: [VendorError!]!
   vendorWarehouse: VendorWarehouse
 }
 
 type VendorWarehouseDelete {
-  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  vendorErrors: [VendorError!]! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `errors` field instead.")
   errors: [VendorError!]!
   vendorWarehouse: VendorWarehouse
 }
@@ -5882,7 +5885,7 @@ input VendorWarehouseInput {
 }
 
 type VendorWarehouseUpdate {
-  vendorErrors: [VendorError!]! @deprecated(reason: "Use errors field instead. This field will be removed in Saleor 4.0.")
+  vendorErrors: [VendorError!]! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `errors` field instead.")
   errors: [VendorError!]!
   vendorWarehouse: VendorWarehouse
 }

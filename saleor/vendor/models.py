@@ -62,4 +62,5 @@ class VendorWarehouse(models.Model):
         verbose_name_plural = "VendorWarehouses"
 
     def __str__(self):
-        return self.Meta.verbose_name
+        return str(self.vendor_id)
+        # return self.Meta.verbose_name
