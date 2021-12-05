@@ -6,15 +6,28 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import graphene
 from babel.numbers import get_currency_precision
 from django.core.serializers.json import DjangoJSONEncoder
+from django.db.models import Q
 
 from ..account.models import User
 from ..checkout.models import Checkout
 from ..core.prices import quantize_price
 from ..core.tracing import traced_atomic_transaction
 from ..order.models import Order
-from . import ChargeStatus, GatewayError, PaymentError, TransactionKind
+from . import (
+    ChargeStatus,
+    GatewayError,
+    PaymentError,
+    StorePaymentMethod,
+    TransactionKind,
+)
 from .error_codes import PaymentErrorCode
-from .interface import AddressData, GatewayResponse, PaymentData
+from .interface import (
+    AddressData,
+    GatewayResponse,
+    PaymentData,
+    PaymentMethodInfo,
+    StorePaymentMethodEnum,
+)
 from .models import Payment, Transaction
 
 if TYPE_CHECKING:
@@ -79,6 +92,10 @@ def create_payment_information(
         reuse_source=store_source,
         data=additional_data or {},
         graphql_customer_id=graphql_customer_id,
+        store_payment_method=StorePaymentMethodEnum[
+            payment.store_payment_method.upper()
+        ],
+        payment_metadata=payment.metadata,
     )
 
 
@@ -94,6 +111,8 @@ def create_payment(
     order: Order = None,
     return_url: str = None,
     external_reference: Optional[str] = None,
+    store_payment_method: str = StorePaymentMethod.NONE,
+    metadata: Optional[Dict[str, str]] = None,
 ) -> Payment:
     """Create a payment instance.
 
@@ -142,6 +161,8 @@ def create_payment(
         "total": total,
         "return_url": return_url,
         "psp_reference": external_reference or "",
+        "store_payment_method": store_payment_method,
+        "metadata": {} if metadata is None else metadata,
     }
 
     payment, _ = Payment.objects.get_or_create(defaults=defaults, **data)
@@ -356,31 +377,35 @@ def update_payment(payment: "Payment", gateway_response: "GatewayResponse"):
         changed_fields.append("psp_reference")
 
     if gateway_response.payment_method_info:
-        _update_payment_method_details(payment, gateway_response, changed_fields)
+        update_payment_method_details(
+            payment, gateway_response.payment_method_info, changed_fields
+        )
 
     if changed_fields:
         payment.save(update_fields=changed_fields)
 
 
-def _update_payment_method_details(
-    payment: "Payment", gateway_response: "GatewayResponse", changed_fields: List[str]
+def update_payment_method_details(
+    payment: "Payment",
+    payment_method_info: Optional["PaymentMethodInfo"],
+    changed_fields: List[str],
 ):
-    if not gateway_response.payment_method_info:
+    if not payment_method_info:
         return
-    if gateway_response.payment_method_info.brand:
-        payment.cc_brand = gateway_response.payment_method_info.brand
+    if payment_method_info.brand:
+        payment.cc_brand = payment_method_info.brand
         changed_fields.append("cc_brand")
-    if gateway_response.payment_method_info.last_4:
-        payment.cc_last_digits = gateway_response.payment_method_info.last_4
+    if payment_method_info.last_4:
+        payment.cc_last_digits = payment_method_info.last_4
         changed_fields.append("cc_last_digits")
-    if gateway_response.payment_method_info.exp_year:
-        payment.cc_exp_year = gateway_response.payment_method_info.exp_year
+    if payment_method_info.exp_year:
+        payment.cc_exp_year = payment_method_info.exp_year
         changed_fields.append("cc_exp_year")
-    if gateway_response.payment_method_info.exp_month:
-        payment.cc_exp_month = gateway_response.payment_method_info.exp_month
+    if payment_method_info.exp_month:
+        payment.cc_exp_month = payment_method_info.exp_month
         changed_fields.append("cc_exp_month")
-    if gateway_response.payment_method_info.type:
-        payment.payment_method_type = gateway_response.payment_method_info.type
+    if payment_method_info.type:
+        payment.payment_method_type = payment_method_info.type
         changed_fields.append("payment_method_type")
 
 
@@ -423,3 +448,14 @@ def price_to_minor_unit(value: Decimal, currency: str):
     number_places = Decimal("10.0") ** precision
     value_without_comma = value * number_places
     return str(value_without_comma.quantize(Decimal("1")))
+
+
+def payment_owned_by_user(payment_pk: int, user) -> bool:
+    if user.is_anonymous:
+        return False
+    return (
+        Payment.objects.filter(
+            (Q(order__user=user) | Q(checkout__user=user)) & Q(pk=payment_pk)
+        ).first()
+        is not None
+    )

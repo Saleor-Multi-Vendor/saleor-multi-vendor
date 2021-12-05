@@ -1,11 +1,13 @@
 import json
 import uuid
+from collections import defaultdict
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, List, Optional
 
 import graphene
-from django.db.models import F, QuerySet
+from django.db.models import F, QuerySet, Sum
 
+from ..attribute.models import AttributeValueTranslation
 from ..checkout.models import Checkout
 from ..core.utils import build_absolute_uri
 from ..core.utils.anonymization import (
@@ -22,7 +24,7 @@ from ..payment import ChargeStatus
 from ..plugins.webhook.utils import from_payment_app_id
 from ..product import ProductMediaTypes
 from ..product.models import Product
-from ..warehouse.models import Warehouse
+from ..warehouse.models import Stock, Warehouse
 from .event_types import WebhookEventType
 from .payload_serializers import PayloadSerializer
 from .serializers import (
@@ -37,8 +39,11 @@ if TYPE_CHECKING:
 
 if TYPE_CHECKING:
     from ..account.models import User
+    from ..discount.models import Sale
+    from ..graphql.discount.mutations import NodeCatalogueInfo
     from ..invoice.models import Invoice
     from ..payment.interface import PaymentData
+    from ..translation.models import Translation
 
 
 ADDRESS_FIELDS = (
@@ -117,11 +122,28 @@ def generate_order_lines_payload(lines: Iterable[OrderLine]):
         lines,
         fields=line_fields,
         extra_dict_data={
+            "product_variant_id": (lambda l: l.product_variant_id),
             "total_price_net_amount": (lambda l: l.total_price.net.amount),
             "total_price_gross_amount": (lambda l: l.total_price.gross.amount),
             "allocations": (lambda l: prepare_order_lines_allocations_payload(l)),
         },
     )
+
+
+def _generate_collection_point_payload(warehouse: "Warehouse"):
+    serializer = PayloadSerializer()
+    collection_point_fields = (
+        "name",
+        "email",
+        "click_and_collect_option",
+        "is_private",
+    )
+    collection_point_data = serializer.serialize(
+        [warehouse],
+        fields=collection_point_fields,
+        additional_fields={"address": (lambda w: w.address, ADDRESS_FIELDS)},
+    )
+    return collection_point_data
 
 
 def generate_order_payload(order: "Order"):
@@ -195,9 +217,75 @@ def generate_order_payload(order: "Order"):
             "original": graphene.Node.to_global_id("Order", order.original_id),
             "lines": json.loads(generate_order_lines_payload(lines)),
             "fulfillments": json.loads(fulfillments_data),
+            "collection_point": json.loads(
+                _generate_collection_point_payload(order.collection_point)
+            )[0]
+            if order.collection_point
+            else None,
         },
     )
     return order_data
+
+
+def _calculate_added(
+    previous_catalogue: "NodeCatalogueInfo",
+    current_catalogue: "NodeCatalogueInfo",
+    key: str,
+) -> List[str]:
+    return list(current_catalogue[key] - previous_catalogue[key])
+
+
+def _calculate_removed(
+    previous_catalogue: "NodeCatalogueInfo",
+    current_catalogue: "NodeCatalogueInfo",
+    key: str,
+) -> List[str]:
+    return _calculate_added(current_catalogue, previous_catalogue, key)
+
+
+def generate_sale_payload(
+    sale: "Sale",
+    previous_catalogue: Optional["NodeCatalogueInfo"] = None,
+    current_catalogue: Optional["NodeCatalogueInfo"] = None,
+):
+    if previous_catalogue is None:
+        previous_catalogue = defaultdict(set)
+    if current_catalogue is None:
+        current_catalogue = defaultdict(set)
+
+    serializer = PayloadSerializer()
+    sale_fields = ("id",)
+
+    return serializer.serialize(
+        [sale],
+        fields=sale_fields,
+        extra_dict_data={
+            "categories_added": _calculate_added(
+                previous_catalogue, current_catalogue, "categories"
+            ),
+            "categories_removed": _calculate_removed(
+                previous_catalogue, current_catalogue, "categories"
+            ),
+            "collections_added": _calculate_added(
+                previous_catalogue, current_catalogue, "collections"
+            ),
+            "collections_removed": _calculate_removed(
+                previous_catalogue, current_catalogue, "collections"
+            ),
+            "products_added": _calculate_added(
+                previous_catalogue, current_catalogue, "products"
+            ),
+            "products_removed": _calculate_removed(
+                previous_catalogue, current_catalogue, "products"
+            ),
+            "variants_added": _calculate_added(
+                previous_catalogue, current_catalogue, "variants"
+            ),
+            "variants_removed": _calculate_removed(
+                previous_catalogue, current_catalogue, "variants"
+            ),
+        },
+    )
 
 
 def generate_invoice_payload(invoice: "Invoice"):
@@ -240,7 +328,12 @@ def generate_checkout_payload(checkout: "Checkout"):
         },
         extra_dict_data={
             # Casting to list to make it json-serializable
-            "lines": list(lines_dict_data)
+            "lines": list(lines_dict_data),
+            "collection_point": json.loads(
+                _generate_collection_point_payload(checkout.collection_point)
+            )[0]
+            if checkout.collection_point
+            else None,
         },
     )
     return checkout_data
@@ -261,11 +354,11 @@ def generate_customer_payload(customer: "User"):
         ],
         additional_fields={
             "default_shipping_address": (
-                lambda c: c.default_billing_address,
+                lambda c: c.default_shipping_address,
                 ADDRESS_FIELDS,
             ),
             "default_billing_address": (
-                lambda c: c.default_shipping_address,
+                lambda c: c.default_billing_address,
                 ADDRESS_FIELDS,
             ),
             "addresses": (
@@ -345,13 +438,13 @@ def generate_product_payload(product: "Product"):
 def generate_product_deleted_payload(product: "Product", variants_id):
     serializer = PayloadSerializer()
     product_fields = PRODUCT_FIELDS
-    variant_global_ids = [
+    product_variant_ids = [
         graphene.Node.to_global_id("ProductVariant", pk) for pk in variants_id
     ]
     product_payload = serializer.serialize(
         [product],
         fields=product_fields,
-        extra_dict_data={"variants": list(variant_global_ids)},
+        extra_dict_data={"variants": list(product_variant_ids)},
     )
     return product_payload
 
@@ -394,12 +487,30 @@ def generate_product_variant_media_payload(product_variant):
     ]
 
 
+def generate_product_variant_with_stock_payload(stocks: Iterable["Stock"]):
+    serializer = PayloadSerializer()
+    extra_dict_data = {
+        "product_id": lambda v: graphene.Node.to_global_id(
+            "Product", v.product_variant.product_id
+        ),
+        "product_variant_id": lambda v: graphene.Node.to_global_id(
+            "ProductVariant", v.product_variant_id
+        ),
+        "warehouse_id": lambda v: graphene.Node.to_global_id(
+            "Warehouse", v.warehouse_id
+        ),
+        "product_slug": lambda v: v.product_variant.product.slug,
+    }
+    return serializer.serialize(stocks, fields=[], extra_dict_data=extra_dict_data)
+
+
 def generate_product_variant_payload(product_variants: Iterable["ProductVariant"]):
     serializer = PayloadSerializer()
     payload = serializer.serialize(
         product_variants,
         fields=PRODUCT_VARIANT_FIELDS,
         extra_dict_data={
+            "id": lambda v: v.get_global_id(),
             "attributes": lambda v: serialize_product_or_variant_attributes(v),
             "product_id": lambda v: graphene.Node.to_global_id("Product", v.product_id),
             "media": lambda v: generate_product_variant_media_payload(v),
@@ -409,6 +520,10 @@ def generate_product_variant_payload(product_variants: Iterable["ProductVariant"
         },
     )
     return payload
+
+
+def generate_product_variant_stocks_payload(product_variant: "ProductVariant"):
+    return product_variant.stocks.aggregate(Sum("quantity"))["quantity__sum"] or 0
 
 
 def generate_fulfillment_lines_payload(fulfillment: Fulfillment):
@@ -424,10 +539,17 @@ def generate_fulfillment_lines_payload(fulfillment: Fulfillment):
             "product_name": lambda fl: fl.order_line.product_name,
             "variant_name": lambda fl: fl.order_line.variant_name,
             "product_sku": lambda fl: fl.order_line.product_sku,
-            "weight": (lambda fl: fl.order_line.variant.get_weight().g),
+            "product_variant_id": lambda fl: fl.order_line.product_variant_id,
+            "weight": (
+                lambda fl: fl.order_line.variant.get_weight().g
+                if fl.order_line.variant
+                else None
+            ),
             "weight_unit": "gram",
             "product_type": (
                 lambda fl: fl.order_line.variant.product.product_type.name
+                if fl.order_line.variant
+                else None
             ),
             "unit_price_net": lambda fl: fl.order_line.unit_price_net_amount,
             "unit_price_gross": lambda fl: fl.order_line.unit_price_gross_amount,
@@ -609,3 +731,44 @@ def generate_sample_payload(event_name: str) -> Optional[dict]:
     else:
         payload = _generate_sample_order_payload(event_name)
     return json.loads(payload) if payload else None
+
+
+def process_translation_context(context):
+    additional_id_fields = [
+        ("product_id", "Product"),
+        ("product_variant_id", "ProductVariant"),
+        ("attribute_id", "Attribute"),
+        ("page_id", "Page"),
+        ("page_type_id", "PageType"),
+    ]
+    result = {}
+    for key, type_name in additional_id_fields:
+        if object_id := context.get(key, None):
+            result[key] = graphene.Node.to_global_id(type_name, object_id)
+        else:
+            result[key] = None
+    return result
+
+
+def generate_translation_payload(translation: "Translation"):
+    object_type, object_id = translation.get_translated_object_id()
+    translated_keys = [
+        {"key": key, "value": value}
+        for key, value in translation.get_translated_keys().items()
+    ]
+
+    context = None
+    if isinstance(translation, AttributeValueTranslation):
+        context = process_translation_context(translation.get_translation_context())
+
+    translation_data = {
+        "id": graphene.Node.to_global_id(object_type, object_id),
+        "language_code": translation.language_code,
+        "type": object_type,
+        "keys": translated_keys,
+    }
+
+    if context:
+        translation_data.update(context)
+
+    return json.dumps(translation_data)

@@ -12,10 +12,12 @@ from ....account.notifications import (
     send_account_confirmation,
 )
 from ....app.models import App
-from ....core.notifications import get_site_context
+from ....core.notification.utils import get_site_context
 from ....core.notify_events import NotifyEventType
 from ....core.utils.json_serializer import CustomJsonEncoder
 from ....core.utils.url import prepare_url
+from ....discount.utils import fetch_catalogue_info
+from ....graphql.discount.mutations import convert_catalogue_info_to_global_ids
 from ....webhook.event_types import WebhookEventType
 from ....webhook.payloads import (
     generate_checkout_payload,
@@ -26,6 +28,8 @@ from ....webhook.payloads import (
     generate_product_deleted_payload,
     generate_product_payload,
     generate_product_variant_payload,
+    generate_product_variant_with_stock_payload,
+    generate_sale_payload,
 )
 from ...manager import get_plugins_manager
 from ...webhook.tasks import trigger_webhooks_for_event
@@ -112,6 +116,42 @@ def test_order_confirmed(mocked_webhook_trigger, settings, order_with_lines):
     expected_data = generate_order_payload(order_with_lines)
     mocked_webhook_trigger.assert_called_once_with(
         WebhookEventType.ORDER_CONFIRMED, expected_data
+    )
+
+
+@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_for_event.delay")
+def test_draft_order_created(mocked_webhook_trigger, settings, order_with_lines):
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    manager = get_plugins_manager()
+    manager.draft_order_created(order_with_lines)
+
+    expected_data = generate_order_payload(order_with_lines)
+    mocked_webhook_trigger.assert_called_once_with(
+        WebhookEventType.DRAFT_ORDER_CREATED, expected_data
+    )
+
+
+@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_for_event.delay")
+def test_draft_order_deleted(mocked_webhook_trigger, settings, order_with_lines):
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    manager = get_plugins_manager()
+    manager.draft_order_deleted(order_with_lines)
+
+    expected_data = generate_order_payload(order_with_lines)
+    mocked_webhook_trigger.assert_called_once_with(
+        WebhookEventType.DRAFT_ORDER_DELETED, expected_data
+    )
+
+
+@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_for_event.delay")
+def test_draft_order_updated(mocked_webhook_trigger, settings, order_with_lines):
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    manager = get_plugins_manager()
+    manager.draft_order_updated(order_with_lines)
+
+    expected_data = generate_order_payload(order_with_lines)
+    mocked_webhook_trigger.assert_called_once_with(
+        WebhookEventType.DRAFT_ORDER_UPDATED, expected_data
     )
 
 
@@ -235,6 +275,38 @@ def test_product_variant_deleted(mocked_webhook_trigger, settings, variant):
     expected_data = generate_product_variant_payload([variant])
     mocked_webhook_trigger.assert_called_once_with(
         WebhookEventType.PRODUCT_VARIANT_DELETED, expected_data
+    )
+
+
+@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_for_event.delay")
+def test_product_variant_out_of_stock(
+    mocked_webhook_trigger, settings, variant_with_many_stocks
+):
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    manager = get_plugins_manager()
+    manager.product_variant_out_of_stock(variant_with_many_stocks.stocks.first())
+
+    expected_data = generate_product_variant_with_stock_payload(
+        [variant_with_many_stocks.stocks.first()]
+    )
+    mocked_webhook_trigger.assert_called_once_with(
+        WebhookEventType.PRODUCT_VARIANT_OUT_OF_STOCK, expected_data
+    )
+
+
+@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_for_event.delay")
+def test_product_variant_back_in_stock(
+    mocked_webhook_trigger, settings, variant_with_many_stocks
+):
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    manager = get_plugins_manager()
+    manager.product_variant_back_in_stock(variant_with_many_stocks.stocks.first())
+
+    expected_data = generate_product_variant_with_stock_payload(
+        [variant_with_many_stocks.stocks.first()]
+    )
+    mocked_webhook_trigger.assert_called_once_with(
+        WebhookEventType.PRODUCT_VARIANT_BACK_IN_STOCK, expected_data
     )
 
 
@@ -390,4 +462,59 @@ def test_notify_user(mocked_webhook_trigger, settings, customer_user, channel_US
     }
     mocked_webhook_trigger.assert_called_once_with(
         WebhookEventType.NOTIFY_USER, json.dumps(expected_data, cls=CustomJsonEncoder)
+    )
+
+
+@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_for_event.delay")
+def test_sale_created(mocked_webhook_trigger, settings, sale):
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    manager = get_plugins_manager()
+    sale_catalogue_info = convert_catalogue_info_to_global_ids(
+        fetch_catalogue_info(sale)
+    )
+    manager.sale_created(sale, current_catalogue=sale_catalogue_info)
+    expected_data = generate_sale_payload(sale, current_catalogue=sale_catalogue_info)
+    mocked_webhook_trigger.assert_called_once_with(
+        WebhookEventType.SALE_CREATED, expected_data
+    )
+
+
+@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_for_event.delay")
+def test_sale_updated(mocked_webhook_trigger, settings, sale, product_list):
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    manager = get_plugins_manager()
+    previous_sale_catalogue_info = convert_catalogue_info_to_global_ids(
+        fetch_catalogue_info(sale)
+    )
+    sale.products.add(*product_list)
+    current_sale_catalogue_info = convert_catalogue_info_to_global_ids(
+        fetch_catalogue_info(sale)
+    )
+
+    manager.sale_updated(
+        sale,
+        previous_catalogue=previous_sale_catalogue_info,
+        current_catalogue=current_sale_catalogue_info,
+    )
+    expected_data = generate_sale_payload(
+        sale,
+        current_catalogue=current_sale_catalogue_info,
+        previous_catalogue=previous_sale_catalogue_info,
+    )
+    mocked_webhook_trigger.assert_called_once_with(
+        WebhookEventType.SALE_UPDATED, expected_data
+    )
+
+
+@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_for_event.delay")
+def test_sale_deleted(mocked_webhook_trigger, settings, sale):
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    manager = get_plugins_manager()
+    sale_catalogue_info = convert_catalogue_info_to_global_ids(
+        fetch_catalogue_info(sale)
+    )
+    manager.sale_deleted(sale, previous_catalogue=sale_catalogue_info)
+    expected_data = generate_sale_payload(sale, previous_catalogue=sale_catalogue_info)
+    mocked_webhook_trigger.assert_called_once_with(
+        WebhookEventType.SALE_DELETED, expected_data
     )

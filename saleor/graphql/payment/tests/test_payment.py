@@ -17,6 +17,7 @@ from ....payment.interface import (
     CustomerSource,
     InitializedPaymentResponse,
     PaymentMethodInfo,
+    StorePaymentMethodEnum,
     TokenConfig,
 )
 from ....payment.models import ChargeStatus, Payment, TransactionKind
@@ -91,13 +92,15 @@ def test_payment_void_gateway_error(
 
 
 CREATE_PAYMENT_MUTATION = """
-    mutation CheckoutPaymentCreate($token: UUID, $input: PaymentInput!) {
-        checkoutPaymentCreate(token: $token, input: $input) {
+    mutation CheckoutPaymentCreate(
+        $token: UUID,
+        $input: PaymentInput!,
+    ) {
+        checkoutPaymentCreate(
+            token: $token,
+            input: $input,
+        ) {
             payment {
-                transactions {
-                    kind,
-                    token
-                }
                 chargeStatus
             }
             errors {
@@ -134,8 +137,6 @@ def test_checkout_add_payment_without_shipping_method_and_not_shipping_required(
     content = get_graphql_content(response)
     data = content["data"]["checkoutPaymentCreate"]
     assert not data["errors"]
-    transactions = data["payment"]["transactions"]
-    assert not transactions
     payment = Payment.objects.get()
     assert payment.checkout == checkout
     assert payment.is_active
@@ -206,8 +207,6 @@ def test_checkout_add_payment_with_shipping_method_and_shipping_required(
     data = content["data"]["checkoutPaymentCreate"]
 
     assert not data["errors"]
-    transactions = data["payment"]["transactions"]
-    assert not transactions
     payment = Payment.objects.get()
     assert payment.checkout == checkout
     assert payment.is_active
@@ -250,8 +249,6 @@ def test_checkout_add_payment(
     data = content["data"]["checkoutPaymentCreate"]
 
     assert not data["errors"]
-    transactions = data["payment"]["transactions"]
-    assert not transactions
     payment = Payment.objects.get()
     assert payment.checkout == checkout
     assert payment.is_active
@@ -288,8 +285,6 @@ def test_checkout_add_payment_default_amount(
     content = get_graphql_content(response)
     data = content["data"]["checkoutPaymentCreate"]
     assert not data["errors"]
-    transactions = data["payment"]["transactions"]
-    assert not transactions
     payment = Payment.objects.get()
     assert payment.checkout == checkout
     assert payment.is_active
@@ -433,6 +428,85 @@ def test_create_payment_for_checkout_with_active_payments(
     active_payments = checkout.payments.all().filter(is_active=True)
     assert active_payments.count() == 1
     assert active_payments.first().pk not in previous_active_payments_ids
+
+
+@pytest.mark.parametrize(
+    "store",
+    [
+        StorePaymentMethodEnum.NONE,
+        StorePaymentMethodEnum.ON_SESSION,
+        StorePaymentMethodEnum.OFF_SESSION,
+    ],
+)
+def test_create_payment_with_store(
+    user_api_client, checkout_without_shipping_required, address, store
+):
+    # given
+    checkout = checkout_without_shipping_required
+    checkout.billing_address = address
+    checkout.save()
+
+    manager = get_plugins_manager()
+    lines = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, [], manager)
+    total = calculations.checkout_total(
+        manager=manager, checkout_info=checkout_info, lines=lines, address=address
+    )
+
+    variables = {
+        "token": checkout.token,
+        "input": {
+            "gateway": DUMMY_GATEWAY,
+            "token": "sample-token",
+            "amount": total.gross.amount,
+            "storePaymentMethod": store,
+        },
+    }
+
+    # when
+    user_api_client.post_graphql(CREATE_PAYMENT_MUTATION, variables)
+
+    # then
+    checkout.refresh_from_db()
+    payment = checkout.payments.first()
+    assert payment.store_payment_method == store.lower()
+
+
+@pytest.mark.parametrize(
+    "metadata", [[{"key": f"key{i}", "value": f"value{i}"} for i in range(5)], [], None]
+)
+def test_create_payment_with_metadata(
+    user_api_client, checkout_without_shipping_required, address, metadata
+):
+    # given
+    checkout = checkout_without_shipping_required
+    checkout.billing_address = address
+    checkout.save()
+
+    manager = get_plugins_manager()
+    lines = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, [], manager)
+    total = calculations.checkout_total(
+        manager=manager, checkout_info=checkout_info, lines=lines, address=address
+    )
+
+    variables = {
+        "token": checkout.token,
+        "input": {
+            "gateway": DUMMY_GATEWAY,
+            "token": "sample-token",
+            "amount": total.gross.amount,
+            "metadata": metadata,
+        },
+    }
+
+    # when
+    user_api_client.post_graphql(CREATE_PAYMENT_MUTATION, variables)
+
+    # then
+    checkout.refresh_from_db()
+    payment = checkout.payments.first()
+    assert payment.metadata == {m["key"]: m["value"] for m in metadata or {}}
 
 
 CAPTURE_QUERY = """
@@ -903,6 +977,7 @@ def set_dummy_customer_id(customer_user, dummy_customer_id):
 def test_list_payment_sources(
     mocker, dummy_customer_id, set_dummy_customer_id, user_api_client, channel_USD
 ):
+    metadata = {f"key_{i}": f"value_{i}" for i in range(5)}
     gateway = DUMMY_GATEWAY
     query = """
     {
@@ -914,6 +989,10 @@ def test_list_payment_sources(
                     lastDigits
                     brand
                     firstDigits
+                }
+                metadata {
+                    key
+                    value
                 }
             }
         }
@@ -928,7 +1007,10 @@ def test_list_payment_sources(
         brand="cardBrand",
     )
     source = CustomerSource(
-        id="payment-method-id", gateway=gateway, credit_card_info=card
+        id="payment-method-id",
+        gateway=gateway,
+        credit_card_info=card,
+        metadata=metadata,
     )
     mock_get_source_list = mocker.patch(
         "saleor.graphql.account.resolvers.gateway.list_payment_sources",
@@ -948,6 +1030,7 @@ def test_list_payment_sources(
             "lastDigits": "5678",
             "brand": "cardBrand",
         },
+        "metadata": [{"key": key, "value": value} for key, value in metadata.items()],
     }
 
 
@@ -1070,3 +1153,81 @@ def test_payment_initialize_plugin_raises_error(
     assert len(errors) == 1
     assert errors[0]["field"] == "paymentData"
     assert errors[0]["message"] == error_msg
+
+
+QUERY_PAYMENT_REFUND_AMOUNT = """
+     query payment($id: ID!) {
+        payment(id: $id) {
+            id,
+            availableRefundAmount{
+                amount
+            }
+            availableCaptureAmount{
+                amount
+            }
+        }
+    }
+"""
+
+QUERY_PAYMENT_CAPTURE_AMOUNT = """
+     query payment($id: ID!) {
+        payment(id: $id) {
+            id,
+            availableCaptureAmount{
+                amount
+            }
+        }
+    }
+"""
+
+
+def test_resolve_available_refund_amount_cannot_refund(
+    staff_api_client, payment_cancelled, permission_manage_orders
+):
+    staff_api_client.user.user_permissions.add(permission_manage_orders)
+    response = staff_api_client.post_graphql(
+        QUERY_PAYMENT_REFUND_AMOUNT,
+        {"id": graphene.Node.to_global_id("Payment", payment_cancelled.pk)},
+    )
+    content = get_graphql_content(response)
+
+    assert not content["data"]["payment"]["availableRefundAmount"]
+
+
+def test_resolve_available_refund_amount(
+    staff_api_client, payment_dummy_fully_charged, permission_manage_orders
+):
+    staff_api_client.user.user_permissions.add(permission_manage_orders)
+    response = staff_api_client.post_graphql(
+        QUERY_PAYMENT_REFUND_AMOUNT,
+        {"id": graphene.Node.to_global_id("Payment", payment_dummy_fully_charged.pk)},
+    )
+    content = get_graphql_content(response)
+
+    assert content["data"]["payment"]["availableRefundAmount"]["amount"] == 98.4
+
+
+def test_resolve_available_capture_amount_cannot_capture(
+    staff_api_client, payment_cancelled, permission_manage_orders
+):
+    staff_api_client.user.user_permissions.add(permission_manage_orders)
+    response = staff_api_client.post_graphql(
+        QUERY_PAYMENT_CAPTURE_AMOUNT,
+        {"id": graphene.Node.to_global_id("Payment", payment_cancelled.pk)},
+    )
+    content = get_graphql_content(response)
+
+    assert not content["data"]["payment"]["availableCaptureAmount"]
+
+
+def test_resolve_available_capture_amount(
+    staff_api_client, payment_dummy, permission_manage_orders
+):
+    staff_api_client.user.user_permissions.add(permission_manage_orders)
+    response = staff_api_client.post_graphql(
+        QUERY_PAYMENT_CAPTURE_AMOUNT,
+        {"id": graphene.Node.to_global_id("Payment", payment_dummy.pk)},
+    )
+    content = get_graphql_content(response)
+
+    assert content["data"]["payment"]["availableCaptureAmount"]["amount"] == 98.4

@@ -1,8 +1,9 @@
 import json
 import logging
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from ...app.models import App
+from ...core.notify_events import NotifyEventType
 from ...core.utils.json_serializer import CustomJsonEncoder
 from ...payment import PaymentError, TransactionKind
 from ...webhook.event_types import WebhookEventType
@@ -18,6 +19,9 @@ from ...webhook.payloads import (
     generate_product_deleted_payload,
     generate_product_payload,
     generate_product_variant_payload,
+    generate_product_variant_with_stock_payload,
+    generate_sale_payload,
+    generate_translation_payload,
 )
 from ..base_plugin import BasePlugin
 from .tasks import trigger_webhook_sync, trigger_webhooks_for_event
@@ -30,12 +34,15 @@ from .utils import (
 if TYPE_CHECKING:
     from ...account.models import User
     from ...checkout.models import Checkout
-    from ...core.notify_events import NotifyEventType
+    from ...discount.models import Sale
+    from ...graphql.discount.mutations import NodeCatalogueInfo
     from ...invoice.models import Invoice
     from ...order.models import Fulfillment, Order
     from ...page.models import Page
     from ...payment.interface import GatewayResponse, PaymentData, PaymentGateway
     from ...product.models import Product, ProductVariant
+    from ...translation.models import Translation
+    from ...warehouse.models import Stock
 
 
 logger = logging.getLogger(__name__)
@@ -83,6 +90,36 @@ class WebhookPlugin(BasePlugin):
         order_data = generate_order_payload(order)
         trigger_webhooks_for_event.delay(WebhookEventType.ORDER_UPDATED, order_data)
 
+    def sale_created(
+        self, sale: "Sale", current_catalogue: "NodeCatalogueInfo", previous_value: Any
+    ) -> Any:
+        if not self.active:
+            return previous_value
+        sale_data = generate_sale_payload(
+            sale, previous_catalogue=None, current_catalogue=current_catalogue
+        )
+        trigger_webhooks_for_event.delay(WebhookEventType.SALE_CREATED, sale_data)
+
+    def sale_updated(
+        self,
+        sale: "Sale",
+        previous_catalogue: "NodeCatalogueInfo",
+        current_catalogue: "NodeCatalogueInfo",
+        previous_value: Any,
+    ) -> Any:
+        if not self.active:
+            return previous_value
+        sale_data = generate_sale_payload(sale, previous_catalogue, current_catalogue)
+        trigger_webhooks_for_event.delay(WebhookEventType.SALE_UPDATED, sale_data)
+
+    def sale_deleted(
+        self, sale: "Sale", previous_catalogue: "NodeCatalogueInfo", previous_value: Any
+    ) -> Any:
+        if not self.active:
+            return previous_value
+        sale_data = generate_sale_payload(sale, previous_catalogue=previous_catalogue)
+        trigger_webhooks_for_event.delay(WebhookEventType.SALE_DELETED, sale_data)
+
     def invoice_request(
         self,
         order: "Order",
@@ -121,12 +158,44 @@ class WebhookPlugin(BasePlugin):
         order_data = generate_order_payload(order)
         trigger_webhooks_for_event.delay(WebhookEventType.ORDER_FULFILLED, order_data)
 
+    def draft_order_created(self, order: "Order", previous_value: Any) -> Any:
+        if not self.active:
+            return previous_value
+        order_data = generate_order_payload(order)
+        trigger_webhooks_for_event.delay(
+            WebhookEventType.DRAFT_ORDER_CREATED, order_data
+        )
+
+    def draft_order_updated(self, order: "Order", previous_value: Any) -> Any:
+        if not self.active:
+            return previous_value
+        order_data = generate_order_payload(order)
+        trigger_webhooks_for_event.delay(
+            WebhookEventType.DRAFT_ORDER_UPDATED, order_data
+        )
+
+    def draft_order_deleted(self, order: "Order", previous_value: Any) -> Any:
+        if not self.active:
+            return previous_value
+        order_data = generate_order_payload(order)
+        trigger_webhooks_for_event.delay(
+            WebhookEventType.DRAFT_ORDER_DELETED, order_data
+        )
+
     def fulfillment_created(self, fulfillment: "Fulfillment", previous_value):
         if not self.active:
             return previous_value
         fulfillment_data = generate_fulfillment_payload(fulfillment)
         trigger_webhooks_for_event.delay(
             WebhookEventType.FULFILLMENT_CREATED, fulfillment_data
+        )
+
+    def fulfillment_canceled(self, fulfillment: "Fulfillment", previous_value):
+        if not self.active:
+            return previous_value
+        fulfillment_data = generate_fulfillment_payload(fulfillment)
+        trigger_webhooks_for_event.delay(
+            WebhookEventType.FULFILLMENT_CANCELED, fulfillment_data
         )
 
     def customer_created(self, customer: "User", previous_value: Any) -> Any:
@@ -195,6 +264,22 @@ class WebhookPlugin(BasePlugin):
             WebhookEventType.PRODUCT_VARIANT_DELETED, product_variant_data
         )
 
+    def product_variant_out_of_stock(self, stock: "Stock", previous_value: Any) -> Any:
+        if not self.active:
+            return previous_value
+        product_variant_data = generate_product_variant_with_stock_payload([stock])
+        trigger_webhooks_for_event.delay(
+            WebhookEventType.PRODUCT_VARIANT_OUT_OF_STOCK, product_variant_data
+        )
+
+    def product_variant_back_in_stock(self, stock: "Stock", previous_value: Any) -> Any:
+        if not self.active:
+            return previous_value
+        product_variant_data = generate_product_variant_with_stock_payload([stock])
+        trigger_webhooks_for_event.delay(
+            WebhookEventType.PRODUCT_VARIANT_BACK_IN_STOCK, product_variant_data
+        )
+
     def checkout_created(self, checkout: "Checkout", previous_value: Any) -> Any:
         if not self.active:
             return previous_value
@@ -211,12 +296,22 @@ class WebhookPlugin(BasePlugin):
             WebhookEventType.CHECKOUT_UPDATED, checkout_data
         )
 
-    def notify(self, event: "NotifyEventType", payload: dict, previous_value) -> Any:
+    def notify(
+        self, event: Union[NotifyEventType, str], payload: dict, previous_value
+    ) -> Any:
         if not self.active:
             return previous_value
+
+        notify_user_event = WebhookEventType.NOTIFY_USER
         data = {"notify_event": event, "payload": payload}
+
+        if event not in NotifyEventType.CHOICES:
+            logger.info(
+                f"Webhook {notify_user_event} triggered for {event} notify event."
+            )
+
         trigger_webhooks_for_event.delay(
-            WebhookEventType.NOTIFY_USER, json.dumps(data, cls=CustomJsonEncoder)
+            notify_user_event, json.dumps(data, cls=CustomJsonEncoder)
         )
 
     def page_created(self, page: "Page", previous_value: Any) -> Any:
@@ -236,6 +331,22 @@ class WebhookPlugin(BasePlugin):
             return previous_value
         page_data = generate_page_payload(page)
         trigger_webhooks_for_event.delay(WebhookEventType.PAGE_DELETED, page_data)
+
+    def translation_created(self, translation: "Translation", previous_value: Any):
+        if not self.active:
+            return previous_value
+        translation_data = generate_translation_payload(translation)
+        trigger_webhooks_for_event.delay(
+            WebhookEventType.TRANSLATION_CREATED, translation_data
+        )
+
+    def translation_updated(self, translation: "Translation", previous_value: Any):
+        if not self.active:
+            return previous_value
+        translation_data = generate_translation_payload(translation)
+        trigger_webhooks_for_event.delay(
+            WebhookEventType.TRANSLATION_UPDATED, translation_data
+        )
 
     def __run_payment_webhook(
         self,

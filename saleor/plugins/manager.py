@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from ..account.models import Address, User
     from ..checkout.fetch import CheckoutInfo, CheckoutLineInfo
     from ..checkout.models import Checkout
+    from ..discount.models import Sale
     from ..invoice.models import Invoice
     from ..order.models import Fulfillment, Order, OrderLine
     from ..page.models import Page
@@ -46,6 +47,8 @@ if TYPE_CHECKING:
         TokenConfig,
     )
     from ..product.models import Product, ProductType, ProductVariant
+    from ..translation.models import Translation
+    from ..warehouse.models import Stock
     from .base_plugin import BasePlugin
 
 
@@ -115,18 +118,14 @@ class PluginsManager(PaymentInterface):
         channel_slug: Optional[str] = None,
         **kwargs
     ):
-        """Try to run a method with the given name on each declared plugin."""
-        with opentracing.global_tracer().start_active_span(
-            f"PluginsManager.{method_name}"
-        ):
-            value = default_value
-            plugins = self.get_plugins(channel_slug=channel_slug)
-
-            for plugin in plugins:
-                value = self.__run_method_on_single_plugin(
-                    plugin, method_name, value, *args, **kwargs
-                )
-            return value
+        """Try to run a method with the given name on each declared active plugin."""
+        value = default_value
+        plugins = self.get_plugins(channel_slug=channel_slug, active_only=True)
+        for plugin in plugins:
+            value = self.__run_method_on_single_plugin(
+                plugin, method_name, value, *args, **kwargs
+            )
+        return value
 
     def __run_method_on_single_plugin(
         self,
@@ -327,6 +326,7 @@ class PluginsManager(PaymentInterface):
                 order_line,
                 variant,
                 product,
+                channel_slug=order.channel.slug,
             ),
             order.currency,
         )
@@ -516,7 +516,21 @@ class PluginsManager(PaymentInterface):
     def product_variant_deleted(self, product_variant: "ProductVariant"):
         default_value = None
         return self.__run_method_on_plugins(
-            "product_variant_deleted", default_value, product_variant
+            "product_variant_deleted",
+            default_value,
+            product_variant,
+        )
+
+    def product_variant_out_of_stock(self, stock: "Stock"):
+        default_value = None
+        self.__run_method_on_plugins(
+            "product_variant_out_of_stock", default_value, stock
+        )
+
+    def product_variant_back_in_stock(self, stock: "Stock"):
+        default_value = None
+        self.__run_method_on_plugins(
+            "product_variant_back_in_stock", default_value, stock
         )
 
     def order_created(self, order: "Order"):
@@ -529,6 +543,42 @@ class PluginsManager(PaymentInterface):
         default_value = None
         return self.__run_method_on_plugins(
             "order_confirmed", default_value, order, channel_slug=order.channel.slug
+        )
+
+    def draft_order_created(self, order: "Order"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "draft_order_created", default_value, order, channel_slug=order.channel.slug
+        )
+
+    def draft_order_updated(self, order: "Order"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "draft_order_updated", default_value, order, channel_slug=order.channel.slug
+        )
+
+    def draft_order_deleted(self, order: "Order"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "draft_order_deleted", default_value, order, channel_slug=order.channel.slug
+        )
+
+    def sale_created(self, sale: "Sale", current_catalogue):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "sale_created", default_value, sale, current_catalogue
+        )
+
+    def sale_deleted(self, sale: "Sale", previous_catalogue):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "sale_deleted", default_value, sale, previous_catalogue
+        )
+
+    def sale_updated(self, sale: "Sale", previous_catalogue, current_catalogue):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "sale_updated", default_value, sale, previous_catalogue, current_catalogue
         )
 
     def invoice_request(
@@ -593,6 +643,15 @@ class PluginsManager(PaymentInterface):
         default_value = None
         return self.__run_method_on_plugins(
             "fulfillment_created",
+            default_value,
+            fulfillment,
+            channel_slug=fulfillment.order.channel.slug,
+        )
+
+    def fulfillment_canceled(self, fulfillment: "Fulfillment"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "fulfillment_canceled",
             default_value,
             fulfillment,
             channel_slug=fulfillment.order.channel.slug,
@@ -726,6 +785,18 @@ class PluginsManager(PaymentInterface):
                 gtw, "list_payment_sources", default_value, customer_id=customer_id
             )
         raise Exception(f"Payment plugin {gateway} is inaccessible!")
+
+    def translation_created(self, translation: "Translation"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "translation_created", default_value, translation
+        )
+
+    def translation_updated(self, translation: "Translation"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "translation_updated", default_value, translation
+        )
 
     def get_plugins(
         self, channel_slug: Optional[str] = None, active_only=False
@@ -930,8 +1001,18 @@ class PluginsManager(PaymentInterface):
         event: "NotifyEventTypeChoice",
         payload: dict,
         channel_slug: Optional[str] = None,
+        plugin_id: Optional[str] = None,
     ):
         default_value = None
+        if plugin_id:
+            plugin = self.get_plugin(plugin_id, channel_slug=channel_slug)
+            return self.__run_method_on_single_plugin(
+                plugin=plugin,
+                method_name="notify",
+                previous_value=default_value,
+                event=event,
+                payload=payload,
+            )
         return self.__run_method_on_plugins(
             "notify", default_value, event, payload, channel_slug=channel_slug
         )

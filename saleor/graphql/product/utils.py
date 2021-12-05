@@ -1,5 +1,5 @@
 from collections import defaultdict, namedtuple
-from typing import TYPE_CHECKING, Dict, Iterable, List
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional
 
 import graphene
 from django.core.exceptions import ValidationError
@@ -67,7 +67,7 @@ def create_stocks(
     variant: "ProductVariant", stocks_data: List[Dict[str, str]], warehouses: "QuerySet"
 ):
     try:
-        Stock.objects.bulk_create(
+        new_stocks = Stock.objects.bulk_create(
             [
                 Stock(
                     product_variant=variant,
@@ -80,6 +80,7 @@ def create_stocks(
     except IntegrityError:
         msg = "Stock for one of warehouses already exists for this product variant."
         raise ValidationError(msg)
+    return new_stocks
 
 
 DraftOrderLinesData = namedtuple(
@@ -104,3 +105,9 @@ def get_draft_order_lines_data_for_variants(
         order_pks.add(line.order_id)
 
     return DraftOrderLinesData(order_to_lines_mapping, line_pks, order_pks)
+
+
+def clean_variant_sku(sku: Optional[str]) -> Optional[str]:
+    if sku:
+        return sku.strip() or None
+    return None

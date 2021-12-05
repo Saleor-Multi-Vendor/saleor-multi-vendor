@@ -7,43 +7,55 @@ from ...tests.utils import get_graphql_content
 
 COUNTRY_CODE = "US"
 
-
-def test_variant_quantity_available_without_country_code(
-    api_client, variant_with_many_stocks, channel_USD
-):
-    query = """
+QUERY_QUANTITY_AVAILABLE = """
     query variantAvailability($id: ID!, $channel: String) {
         productVariant(id: $id, channel: $channel) {
             quantityAvailable
         }
     }
     """
+
+
+def test_variant_quantity_available_without_country_code(
+    api_client, variant_with_many_stocks, channel_USD
+):
     variables = {
         "id": graphene.Node.to_global_id("ProductVariant", variant_with_many_stocks.pk),
         "channel": channel_USD.slug,
     }
-    response = api_client.post_graphql(query, variables)
+    response = api_client.post_graphql(QUERY_QUANTITY_AVAILABLE, variables)
     content = get_graphql_content(response)
     variant_data = content["data"]["productVariant"]
     assert variant_data["quantityAvailable"] == 7
 
 
+def test_variant_quantity_available_when_one_stock_is_exceeded(
+    api_client, variant_with_many_stocks, channel_USD
+):
+    # make first stock exceeded
+    stock = variant_with_many_stocks.stocks.first()
+    stock.quantity = -99
+    stock.save()
+
+    variables = {
+        "id": graphene.Node.to_global_id("ProductVariant", variant_with_many_stocks.pk),
+        "channel": channel_USD.slug,
+    }
+    response = api_client.post_graphql(QUERY_QUANTITY_AVAILABLE, variables)
+    content = get_graphql_content(response)
+    variant_data = content["data"]["productVariant"]
+    assert variant_data["quantityAvailable"] == 3
+
+
 def test_variant_quantity_available_without_country_code_and_no_channel_shipping_zones(
     api_client, variant_with_many_stocks, channel_USD
 ):
-    query = """
-    query variantAvailability($id: ID!, $channel: String) {
-        productVariant(id: $id, channel: $channel) {
-            quantityAvailable
-        }
-    }
-    """
     channel_USD.shipping_zones.clear()
     variables = {
         "id": graphene.Node.to_global_id("ProductVariant", variant_with_many_stocks.pk),
         "channel": channel_USD.slug,
     }
-    response = api_client.post_graphql(query, variables)
+    response = api_client.post_graphql(QUERY_QUANTITY_AVAILABLE, variables)
     content = get_graphql_content(response)
     variant_data = content["data"]["productVariant"]
     assert variant_data["quantityAvailable"] == 0
@@ -204,6 +216,65 @@ def test_variant_quantity_available_without_inventory_tracking_and_stocks(
 ):
     variant.track_inventory = False
     variant.save(update_fields=["track_inventory"])
+    variables = {
+        "id": graphene.Node.to_global_id("ProductVariant", variant.pk),
+        "country": COUNTRY_CODE,
+        "channel": channel_USD.slug,
+    }
+    response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
+    content = get_graphql_content(response)
+    variant_data = content["data"]["productVariant"]
+    assert variant_data["deprecatedByCountry"] == settings.MAX_CHECKOUT_LINE_QUANTITY
+    assert variant_data["byAddress"] == settings.MAX_CHECKOUT_LINE_QUANTITY
+
+
+@override_settings(MAX_CHECKOUT_LINE_QUANTITY=15)
+def test_variant_quantity_available_preorder_with_channel_threshold(
+    api_client,
+    preorder_variant_channel_threshold,
+    channel_USD,
+):
+    variant = preorder_variant_channel_threshold
+    variables = {
+        "id": graphene.Node.to_global_id("ProductVariant", variant.pk),
+        "country": COUNTRY_CODE,
+        "channel": channel_USD.slug,
+    }
+    response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
+    content = get_graphql_content(response)
+    variant_data = content["data"]["productVariant"]
+    channel_listing = variant.channel_listings.get()
+    assert (
+        variant_data["deprecatedByCountry"]
+        == channel_listing.preorder_quantity_threshold
+    )
+    assert variant_data["byAddress"] == channel_listing.preorder_quantity_threshold
+
+
+@override_settings(MAX_CHECKOUT_LINE_QUANTITY=15)
+def test_variant_quantity_available_preorder_with_global_threshold(
+    api_client, preorder_variant_global_threshold, channel_USD
+):
+    variant = preorder_variant_global_threshold
+    variables = {
+        "id": graphene.Node.to_global_id("ProductVariant", variant.pk),
+        "country": COUNTRY_CODE,
+        "channel": channel_USD.slug,
+    }
+    response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
+    content = get_graphql_content(response)
+    variant_data = content["data"]["productVariant"]
+    assert variant_data["deprecatedByCountry"] == variant.preorder_global_threshold
+    assert variant_data["byAddress"] == variant.preorder_global_threshold
+
+
+@override_settings(MAX_CHECKOUT_LINE_QUANTITY=15)
+def test_variant_quantity_available_preorder_without_threshold(
+    api_client, preorder_variant_global_threshold, settings, channel_USD
+):
+    variant = preorder_variant_global_threshold
+    variant.preorder_global_threshold = None
+    variant.save(update_fields=["preorder_global_threshold"])
     variables = {
         "id": graphene.Node.to_global_id("ProductVariant", variant.pk),
         "country": COUNTRY_CODE,

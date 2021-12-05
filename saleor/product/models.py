@@ -2,6 +2,7 @@ import datetime
 from typing import TYPE_CHECKING, Iterable, Optional, Union
 from uuid import uuid4
 
+import graphene
 from django.conf import settings
 from django.contrib.postgres.aggregates import StringAgg
 from django.contrib.postgres.indexes import GinIndex
@@ -27,6 +28,7 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.encoding import smart_text
 from django_measurement.models import MeasurementField
 from django_prices.models import MoneyField
@@ -35,21 +37,26 @@ from mptt.managers import TreeManager
 from mptt.models import MPTTModel
 from versatileimagefield.fields import PPOIField, VersatileImageField
 
-from ..account.utils import requestor_is_staff_member_or_app
 from ..channel.models import Channel
 from ..core.db.fields import SanitizedJSONField
 from ..core.models import ModelWithMetadata, PublishableModel, SortableModel
-from ..core.permissions import ProductPermissions, ProductTypePermissions
+from ..core.permissions import (
+    DiscountPermissions,
+    OrderPermissions,
+    ProductPermissions,
+    ProductTypePermissions,
+    has_one_of_permissions,
+)
 from ..core.units import WeightUnits
 from ..core.utils import build_absolute_uri
 from ..core.utils.draftjs import json_content_to_raw_text
 from ..core.utils.editorjs import clean_editor_js
-from ..core.utils.translations import TranslationProxy
+from ..core.utils.translations import Translation, TranslationProxy
 from ..core.weight import zero_weight
 from ..discount import DiscountInfo
 from ..discount.utils import calculate_discounted_price
 from ..seo.models import SeoModel, SeoModelTranslation
-from . import ProductMediaTypes
+from . import ProductMediaTypes, ProductTypeKind
 
 if TYPE_CHECKING:
     # flake8: noqa
@@ -58,6 +65,14 @@ if TYPE_CHECKING:
 
     from ..account.models import User
     from ..app.models import App
+
+ALL_PRODUCTS_PERMISSIONS = [
+    # List of permissions, where each of them allows viewing all products
+    # (including unpublished).
+    OrderPermissions.MANAGE_ORDERS,
+    DiscountPermissions.MANAGE_DISCOUNTS,
+    ProductPermissions.MANAGE_PRODUCTS,
+]
 
 
 class Category(ModelWithMetadata, MPTTModel, SeoModel):
@@ -81,7 +96,6 @@ class Category(ModelWithMetadata, MPTTModel, SeoModel):
 
 
 class CategoryTranslation(SeoModelTranslation):
-    language_code = models.CharField(max_length=10)
     category = models.ForeignKey(
         Category, related_name="translations", on_delete=models.CASCADE
     )
@@ -103,10 +117,24 @@ class CategoryTranslation(SeoModelTranslation):
             self.category_id,
         )
 
+    def get_translated_object_id(self):
+        return "Category", self.category_id
+
+    def get_translated_keys(self):
+        translated_keys = super().get_translated_keys()
+        translated_keys.update(
+            {
+                "name": self.name,
+                "description": self.description,
+            }
+        )
+        return translated_keys
+
 
 class ProductType(ModelWithMetadata):
     name = models.CharField(max_length=250)
     slug = models.SlugField(max_length=255, unique=True, allow_unicode=True)
+    kind = models.CharField(max_length=32, choices=ProductTypeKind.CHOICES)
     has_variants = models.BooleanField(default=True)
     is_shipping_required = models.BooleanField(default=True)
     is_digital = models.BooleanField(default=False)
@@ -175,7 +203,7 @@ class ProductsQueryset(models.QuerySet):
         return published.filter(Exists(variants.filter(product_id=OuterRef("pk"))))
 
     def visible_to_user(self, requestor: Union["User", "App"], channel_slug: str):
-        if requestor_is_staff_member_or_app(requestor):
+        if has_one_of_permissions(requestor, ALL_PRODUCTS_PERMISSIONS):
             if channel_slug:
                 channels = Channel.objects.filter(slug=str(channel_slug)).values("id")
                 channel_listings = ProductChannelListing.objects.filter(
@@ -411,7 +439,6 @@ class Product(SeoModel, ModelWithMetadata):
 
 
 class ProductTranslation(SeoModelTranslation):
-    language_code = models.CharField(max_length=10)
     product = models.ForeignKey(
         Product, related_name="translations", on_delete=models.CASCADE
     )
@@ -432,6 +459,19 @@ class ProductTranslation(SeoModelTranslation):
             self.name,
             self.product_id,
         )
+
+    def get_translated_object_id(self):
+        return "Product", self.product_id
+
+    def get_translated_keys(self):
+        translated_keys = super().get_translated_keys()
+        translated_keys.update(
+            {
+                "name": self.name,
+                "description": self.description,
+            }
+        )
+        return translated_keys
 
 
 class ProductVariantQueryset(models.QuerySet):
@@ -500,13 +540,16 @@ class ProductChannelListing(PublishableModel):
 
 
 class ProductVariant(SortableModel, ModelWithMetadata):
-    sku = models.CharField(max_length=255, unique=True)
+    sku = models.CharField(max_length=255, unique=True, null=True, blank=True)
     name = models.CharField(max_length=255, blank=True)
     product = models.ForeignKey(
         Product, related_name="variants", on_delete=models.CASCADE
     )
     media = models.ManyToManyField("ProductMedia", through="VariantMedia")
     track_inventory = models.BooleanField(default=True)
+    is_preorder = models.BooleanField(default=False)
+    preorder_end_date = models.DateTimeField(null=True, blank=True)
+    preorder_global_threshold = models.IntegerField(blank=True, null=True)
 
     weight = MeasurementField(
         measurement=Weight,
@@ -523,7 +566,10 @@ class ProductVariant(SortableModel, ModelWithMetadata):
         app_label = "product"
 
     def __str__(self) -> str:
-        return self.name or self.sku
+        return self.name or self.sku or f"ID:{self.pk}"
+
+    def get_global_id(self):
+        return graphene.Node.to_global_id("ProductVariant", self.id)
 
     def get_price(
         self,
@@ -533,12 +579,14 @@ class ProductVariant(SortableModel, ModelWithMetadata):
         channel_listing: "ProductVariantChannelListing",
         discounts: Optional[Iterable[DiscountInfo]] = None,
     ) -> "Money":
+
         return calculate_discounted_price(
             product=product,
             price=channel_listing.price,
             discounts=discounts,
             collections=collections,
             channel=channel,
+            variant_id=self.id,
         )
 
     def get_weight(self):
@@ -546,6 +594,9 @@ class ProductVariant(SortableModel, ModelWithMetadata):
 
     def is_shipping_required(self) -> bool:
         return self.product.product_type.is_shipping_required
+
+    def is_gift_card(self) -> bool:
+        return self.product.product_type.kind == ProductTypeKind.GIFT_CARD
 
     def is_digital(self) -> bool:
         is_digital = self.product.product_type.is_digital
@@ -566,9 +617,13 @@ class ProductVariant(SortableModel, ModelWithMetadata):
     def get_ordering_queryset(self):
         return self.product.variants.all()
 
+    def is_preorder_active(self):
+        return self.is_preorder and (
+            self.preorder_end_date is None or timezone.now() <= self.preorder_end_date
+        )
 
-class ProductVariantTranslation(models.Model):
-    language_code = models.CharField(max_length=10)
+
+class ProductVariantTranslation(Translation):
     product_variant = models.ForeignKey(
         ProductVariant, related_name="translations", on_delete=models.CASCADE
     )
@@ -590,6 +645,21 @@ class ProductVariantTranslation(models.Model):
 
     def __str__(self):
         return self.name or str(self.product_variant)
+
+    def get_translated_object_id(self):
+        return "ProductVariant", self.product_variant_id
+
+    def get_translated_keys(self):
+        return {"name": self.name}
+
+
+class ProductVariantChannelListingQuerySet(models.QuerySet):
+    def annotate_preorder_quantity_allocated(self):
+        return self.annotate(
+            preorder_quantity_allocated=Coalesce(
+                Sum("preorder_allocations__quantity"), 0
+            ),
+        )
 
 
 class ProductVariantChannelListing(models.Model):
@@ -623,6 +693,10 @@ class ProductVariantChannelListing(models.Model):
         null=True,
     )
     cost_price = MoneyField(amount_field="cost_price_amount", currency_field="currency")
+
+    preorder_quantity_threshold = models.IntegerField(blank=True, null=True)
+
+    objects = models.Manager.from_queryset(ProductVariantChannelListingQuerySet)()
 
     class Meta:
         unique_together = [["variant", "channel"]]
@@ -735,7 +809,7 @@ class CollectionsQueryset(models.QuerySet):
         )
 
     def visible_to_user(self, requestor: Union["User", "App"], channel_slug: str):
-        if requestor_is_staff_member_or_app(requestor):
+        if has_one_of_permissions(requestor, ALL_PRODUCTS_PERMISSIONS):
             if channel_slug:
                 return self.filter(channel_listings__channel__slug=str(channel_slug))
             return self.all()
@@ -791,7 +865,6 @@ class CollectionChannelListing(PublishableModel):
 
 
 class CollectionTranslation(SeoModelTranslation):
-    language_code = models.CharField(max_length=10)
     collection = models.ForeignKey(
         Collection, related_name="translations", on_delete=models.CASCADE
     )
@@ -812,3 +885,16 @@ class CollectionTranslation(SeoModelTranslation):
 
     def __str__(self) -> str:
         return self.name if self.name else str(self.pk)
+
+    def get_translated_object_id(self):
+        return "Collection", self.collection_id
+
+    def get_translated_keys(self):
+        translated_keys = super().get_translated_keys()
+        translated_keys.update(
+            {
+                "name": self.name,
+                "description": self.description,
+            }
+        )
+        return translated_keys

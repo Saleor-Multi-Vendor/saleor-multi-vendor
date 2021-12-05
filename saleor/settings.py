@@ -20,6 +20,7 @@ from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.logging import ignore_logger
 
 from . import patched_print_object
+from .core.languages import LANGUAGES as CORE_LANGUAGES
 
 
 def get_list(text):
@@ -76,57 +77,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 TIME_ZONE = "UTC"
 LANGUAGE_CODE = "en"
-LANGUAGES = [
-    ("ar", "Arabic"),
-    ("az", "Azerbaijani"),
-    ("bg", "Bulgarian"),
-    ("bn", "Bengali"),
-    ("ca", "Catalan"),
-    ("cs", "Czech"),
-    ("da", "Danish"),
-    ("de", "German"),
-    ("el", "Greek"),
-    ("en", "English"),
-    ("es", "Spanish"),
-    ("es-co", "Colombian Spanish"),
-    ("et", "Estonian"),
-    ("fa", "Persian"),
-    ("fi", "Finnish"),
-    ("fr", "French"),
-    ("hi", "Hindi"),
-    ("hu", "Hungarian"),
-    ("hy", "Armenian"),
-    ("id", "Indonesian"),
-    ("is", "Icelandic"),
-    ("it", "Italian"),
-    ("ja", "Japanese"),
-    ("ka", "Georgian"),
-    ("km", "Khmer"),
-    ("ko", "Korean"),
-    ("lt", "Lithuanian"),
-    ("mn", "Mongolian"),
-    ("my", "Burmese"),
-    ("nb", "Norwegian"),
-    ("nl", "Dutch"),
-    ("pl", "Polish"),
-    ("pt", "Portuguese"),
-    ("pt-br", "Brazilian Portuguese"),
-    ("ro", "Romanian"),
-    ("ru", "Russian"),
-    ("sk", "Slovak"),
-    ("sl", "Slovenian"),
-    ("sq", "Albanian"),
-    ("sr", "Serbian"),
-    ("sv", "Swedish"),
-    ("sw", "Swahili"),
-    ("ta", "Tamil"),
-    ("th", "Thai"),
-    ("tr", "Turkish"),
-    ("uk", "Ukrainian"),
-    ("vi", "Vietnamese"),
-    ("zh-hans", "Simplified Chinese"),
-    ("zh-hant", "Traditional Chinese"),
-]
+LANGUAGES = CORE_LANGUAGES
 LOCALE_PATHS = [os.path.join(PROJECT_ROOT, "locale")]
 USE_I18N = True
 USE_L10N = True
@@ -233,6 +184,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.auth",
     "django.contrib.postgres",
+    "django_celery_beat",
     # Local apps
     "saleor.plugins",
     "saleor.account",
@@ -530,6 +482,17 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", None)
 
+CELERY_BEAT_SCHEDULE = {
+    "delete-empty-allocations": {
+        "task": "saleor.warehouse.tasks.delete_empty_allocations_task",
+        "schedule": timedelta(days=1),
+    },
+    "deactivate-preorder-for-variants": {
+        "task": "saleor.product.tasks.deactivate_preorder_for_variants_task",
+        "schedule": timedelta(hours=1),
+    },
+}
+
 # Change this value if your application is running behind a proxy,
 # e.g. HTTP_CF_Connecting_IP for Cloudflare or X_FORWARDED_FOR
 REAL_IP_ENVIRON = os.environ.get("REAL_IP_ENVIRON", "REMOTE_ADDR")
@@ -544,11 +507,18 @@ DEFAULT_CHANNEL_SLUG = os.environ.get("DEFAULT_CHANNEL_SLUG", "default-channel")
 #  Sentry
 sentry_sdk.utils.MAX_STRING_LENGTH = 4096
 SENTRY_DSN = os.environ.get("SENTRY_DSN")
-if SENTRY_DSN:
-    sentry_sdk.init(
-        dsn=SENTRY_DSN, integrations=[CeleryIntegration(), DjangoIntegration()]
-    )
+SENTRY_OPTS = {"integrations": [CeleryIntegration(), DjangoIntegration()]}
+
+
+def SENTRY_INIT(dsn: str, sentry_opts: dict):
+    """Init function for sentry.
+
+    Will only be called if SENTRY_DSN is not None, during core start, can be
+    overriden in separate settings file.
+    """
+    sentry_sdk.init(dsn, **sentry_opts)
     ignore_logger("graphql.execution.utils")
+
 
 GRAPHENE = {
     "RELAY_CONNECTION_ENFORCE_FIRST_OR_LAST": True,
@@ -598,6 +568,11 @@ if (
         "Make sure you've added storefront address to ALLOWED_CLIENT_HOSTS "
         "if ENABLE_ACCOUNT_CONFIRMATION_BY_EMAIL is enabled."
     )
+
+# Timeouts for webhook requests. Sync webhooks (eg. payment webhook) need more time
+# for getting response from the server.
+WEBHOOK_TIMEOUT = 10
+WEBHOOK_SYNC_TIMEOUT = 20
 
 # Initialize a simple and basic Jaeger Tracing integration
 # for open-tracing if enabled.

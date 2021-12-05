@@ -16,9 +16,9 @@ from ....product.utils.costs import (
 from ...account import types as account_types
 from ...channel.dataloaders import ChannelByIdLoader
 from ...core.connection import CountableDjangoObjectType
+from ...core.descriptions import ADDED_IN_31
 from ...decorators import permission_required
 from ...discount.dataloaders import DiscountsByDateTimeLoader
-from ...utils import get_user_country_context
 from ..dataloaders import (
     CollectionsByProductIdLoader,
     ProductByIdLoader,
@@ -160,9 +160,8 @@ class ProductChannelListing(CountableDjangoObjectType):
     @traced_resolver
     def resolve_pricing(root: models.ProductChannelListing, info, address=None):
         context = info.context
-        country_code = get_user_country_context(
-            address, info.context.site.settings.company_address
-        )
+
+        address_country = address.country if address is not None else None
 
         def calculate_pricing_info(discounts):
             def calculate_pricing_with_channel(channel):
@@ -174,6 +173,13 @@ class ProductChannelListing(CountableDjangoObjectType):
                             def calculate_pricing_with_collections(collections):
                                 if not variants_channel_listing:
                                     return None
+
+                                country_code = (
+                                    address_country or channel.default_country.code
+                                )
+                                local_currency = None
+                                local_currency = get_currency_for_country(country_code)
+
                                 availability = get_product_availability(
                                     product=product,
                                     product_channel_listing=root,
@@ -184,9 +190,7 @@ class ProductChannelListing(CountableDjangoObjectType):
                                     channel=channel,
                                     manager=context.plugins,
                                     country=Country(country_code),
-                                    local_currency=get_currency_for_country(
-                                        country_code
-                                    ),
+                                    local_currency=local_currency,
                                 )
                                 from .products import ProductPricingInfo
 
@@ -231,9 +235,28 @@ class ProductChannelListing(CountableDjangoObjectType):
         )
 
 
+class PreorderThreshold(graphene.ObjectType):
+    quantity = graphene.Int(
+        required=False,
+        description="Preorder threshold for product variant in this channel.",
+    )
+    sold_units = graphene.Int(
+        required=True,
+        description="Number of sold product variant in this channel.",
+    )
+
+    class Meta:
+        description = "Represents preorder variant data for channel."
+
+
 class ProductVariantChannelListing(CountableDjangoObjectType):
     cost_price = graphene.Field(Money, description="Cost price of the variant.")
     margin = graphene.Int(description="Gross margin percentage value.")
+    preorder_threshold = graphene.Field(
+        PreorderThreshold,
+        required=False,
+        description=f"{ADDED_IN_31} Preorder variant data.",
+    )
 
     class Meta:
         description = "Represents product varaint channel listing."
@@ -249,6 +272,17 @@ class ProductVariantChannelListing(CountableDjangoObjectType):
     @permission_required(ProductPermissions.MANAGE_PRODUCTS)
     def resolve_margin(root: models.ProductVariantChannelListing, *_args):
         return get_margin_for_variant_channel_listing(root)
+
+    @staticmethod
+    def resolve_preorder_threshold(
+        root: models.ProductVariantChannelListing, info, **_kwargs
+    ):
+        # The preorder_quantity_allocated field is added through annotation
+        # when using the `resolve_channel_listings` resolver.
+        return PreorderThreshold(
+            quantity=root.preorder_quantity_threshold,
+            sold_units=getattr(root, "preorder_quantity_allocated", 0),
+        )
 
 
 class CollectionChannelListing(CountableDjangoObjectType):

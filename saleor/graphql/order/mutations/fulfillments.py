@@ -6,10 +6,18 @@ from django.template.defaultfilters import pluralize
 
 from ....core.exceptions import InsufficientStock
 from ....core.permissions import OrderPermissions
+from ....core.tracing import traced_atomic_transaction
+from ....giftcard.utils import (
+    get_gift_card_lines,
+    gift_cards_create,
+    order_has_gift_card_lines,
+)
 from ....order import FulfillmentLineData, FulfillmentStatus, OrderLineData
 from ....order import models as order_models
 from ....order.actions import (
+    approve_fulfillment,
     cancel_fulfillment,
+    cancel_waiting_fulfillment,
     create_fulfillments,
     create_fulfillments_for_returned_products,
     create_refund_fulfillment,
@@ -17,6 +25,7 @@ from ....order.actions import (
 )
 from ....order.error_codes import OrderErrorCode
 from ....order.notifications import send_fulfillment_update
+from ...core.descriptions import ADDED_IN_31
 from ...core.mutations import BaseMutation
 from ...core.scalars import PositiveDecimal
 from ...core.types.common import OrderError
@@ -58,18 +67,17 @@ class OrderFulfillInput(graphene.InputObjectType):
         description="If true, send an email notification to the customer."
     )
 
+    allow_stock_to_be_exceeded = graphene.Boolean(
+        description="If true, then allow proceed fulfillment when stock is exceeded.",
+        default_value=False,
+    )
+
 
 class FulfillmentUpdateTrackingInput(graphene.InputObjectType):
     tracking_number = graphene.String(description="Fulfillment tracking number.")
     notify_customer = graphene.Boolean(
         default_value=False,
         description="If true, send an email notification to the customer.",
-    )
-
-
-class FulfillmentCancelInput(graphene.InputObjectType):
-    warehouse_id = graphene.ID(
-        description="ID of warehouse where items will be restock.", required=True
     )
 
 
@@ -84,7 +92,7 @@ class OrderFulfill(BaseMutation):
             description="ID of the order to be fulfilled.", name="order"
         )
         input = OrderFulfillInput(
-            required=True, description="Fields required to create an fulfillment."
+            required=True, description="Fields required to create a fulfillment."
         )
 
     class Meta:
@@ -95,10 +103,11 @@ class OrderFulfill(BaseMutation):
 
     @classmethod
     def clean_lines(cls, order_lines, quantities):
-        for order_line, line_quantities in zip(order_lines, quantities):
+        for order_line in order_lines:
+            line_total_quantity = quantities[order_line.pk]
             line_quantity_unfulfilled = order_line.quantity_unfulfilled
 
-            if sum(line_quantities) > line_quantity_unfulfilled:
+            if line_total_quantity > line_quantity_unfulfilled:
                 msg = (
                     "Only %(quantity)d item%(item_pluralize)s remaining "
                     "to fulfill: %(order_line)s."
@@ -150,6 +159,23 @@ class OrderFulfill(BaseMutation):
             )
 
     @classmethod
+    def check_lines_for_preorder(cls, order_lines):
+        for order_line in order_lines:
+            if order_line.variant_id and order_line.variant.is_preorder_active():
+                order_line_global_id = graphene.Node.to_global_id(
+                    "OrderLine", order_line.pk
+                )
+                raise ValidationError(
+                    {
+                        "order_line_id": ValidationError(
+                            "Can not fulfill preorder variant.",
+                            code=OrderErrorCode.FULFILL_ORDER_LINE,
+                            params={"order_lines": [order_line_global_id]},
+                        )
+                    }
+                )
+
+    @classmethod
     def check_total_quantity_of_items(cls, quantities_for_lines):
         flat_quantities = sum(quantities_for_lines, [])
         if sum(flat_quantities) <= 0:
@@ -163,7 +189,21 @@ class OrderFulfill(BaseMutation):
             )
 
     @classmethod
-    def clean_input(cls, data):
+    def clean_input(cls, info, order, data):
+        site_settings = info.context.site.settings
+        if not order.is_fully_paid() and (
+            site_settings.fulfillment_auto_approve
+            and not site_settings.fulfillment_allow_unpaid
+        ):
+            raise ValidationError(
+                {
+                    "order": ValidationError(
+                        "Cannot fulfill unpaid order.",
+                        code=OrderErrorCode.CANNOT_FULFILL_UNPAID_ORDER.value,
+                    )
+                }
+            )
+
         lines = data["lines"]
 
         warehouse_ids_for_lines = [
@@ -180,8 +220,15 @@ class OrderFulfill(BaseMutation):
         order_lines = cls.get_nodes_or_error(
             lines_ids, field="lines", only_type=OrderLine
         )
+        order_line_id_to_total_quantity = {
+            order_line.pk: sum(line_quantities)
+            for order_line, line_quantities in zip(order_lines, quantities_for_lines)
+        }
 
-        cls.clean_lines(order_lines, quantities_for_lines)
+        cls.clean_lines(order_lines, order_line_id_to_total_quantity)
+
+        if site_settings.fulfillment_auto_approve:
+            cls.check_lines_for_preorder(order_lines)
 
         cls.check_total_quantity_of_items(quantities_for_lines)
 
@@ -197,29 +244,60 @@ class OrderFulfill(BaseMutation):
                     )
 
         data["order_lines"] = order_lines
-        data["quantities"] = quantities_for_lines
+        data["gift_card_lines"] = get_gift_card_lines(order_lines)
+        data["quantities"] = order_line_id_to_total_quantity
         data["lines_for_warehouses"] = lines_for_warehouses
         return data
 
     @classmethod
+    @traced_atomic_transaction()
     def perform_mutation(cls, _root, info, order, **data):
-        order = cls.get_node_or_error(info, order, field="order", only_type=Order)
+        order = cls.get_node_or_error(
+            info,
+            order,
+            field="order",
+            only_type=Order,
+            qs=order_models.Order.objects.prefetch_related("lines__variant"),
+        )
         data = data.get("input")
 
-        cleaned_input = cls.clean_input(data)
+        cleaned_input = cls.clean_input(info, order, data)
 
-        user = info.context.user
+        context = info.context
+        user = context.user if not context.user.is_anonymous else None
+        app = context.app
+        manager = context.plugins
         lines_for_warehouses = cleaned_input["lines_for_warehouses"]
         notify_customer = cleaned_input.get("notify_customer", True)
+        allow_stock_to_be_exceeded = cleaned_input.get(
+            "allow_stock_to_be_exceeded", False
+        )
+        gift_card_lines = cleaned_input["gift_card_lines"]
+        quantities = cleaned_input["quantities"]
+
+        approved = info.context.site.settings.fulfillment_auto_approve
+
+        if approved:
+            gift_cards_create(
+                order,
+                gift_card_lines,
+                quantities,
+                context.site.settings,
+                user,
+                app,
+                manager,
+            )
 
         try:
             fulfillments = create_fulfillments(
                 user,
-                info.context.app,
+                app,
                 order,
                 dict(lines_for_warehouses),
-                info.context.plugins,
+                manager,
                 notify_customer,
+                allow_stock_to_be_exceeded=allow_stock_to_be_exceeded,
+                approved=approved,
             )
         except InsufficientStock as exc:
             errors = prepare_insufficient_stock_order_validation_errors(exc)
@@ -237,9 +315,9 @@ class FulfillmentUpdateTracking(BaseMutation):
     )
 
     class Arguments:
-        id = graphene.ID(required=True, description="ID of an fulfillment to update.")
+        id = graphene.ID(required=True, description="ID of a fulfillment to update.")
         input = FulfillmentUpdateTrackingInput(
-            required=True, description="Fields required to update an fulfillment."
+            required=True, description="Fields required to update a fulfillment."
         )
 
     class Meta:
@@ -269,14 +347,22 @@ class FulfillmentUpdateTracking(BaseMutation):
         return FulfillmentUpdateTracking(fulfillment=fulfillment, order=order)
 
 
+class FulfillmentCancelInput(graphene.InputObjectType):
+    warehouse_id = graphene.ID(
+        description="ID of a warehouse where items will be restocked. Optional "
+        "when fulfillment is in WAITING_FOR_APPROVAL state.",
+        required=False,
+    )
+
+
 class FulfillmentCancel(BaseMutation):
     fulfillment = graphene.Field(Fulfillment, description="A canceled fulfillment.")
     order = graphene.Field(Order, description="Order which fulfillment was cancelled.")
 
     class Arguments:
-        id = graphene.ID(required=True, description="ID of an fulfillment to cancel.")
+        id = graphene.ID(required=True, description="ID of a fulfillment to cancel.")
         input = FulfillmentCancelInput(
-            required=True, description="Fields required to cancel an fulfillment."
+            required=False, description="Fields required to cancel a fulfillment."
         )
 
     class Meta:
@@ -286,34 +372,134 @@ class FulfillmentCancel(BaseMutation):
         error_type_field = "order_errors"
 
     @classmethod
-    def perform_mutation(cls, _root, info, **data):
-        warehouse_id = data.get("input").get("warehouse_id")
-        warehouse = cls.get_node_or_error(
-            info, warehouse_id, only_type="Warehouse", field="warehouse_id"
-        )
-        fulfillment = cls.get_node_or_error(info, data.get("id"), only_type=Fulfillment)
-
+    def validate_fulfillment(cls, fulfillment, warehouse):
         if not fulfillment.can_edit():
-            err_msg = "This fulfillment can't be canceled"
             raise ValidationError(
                 {
                     "fulfillment": ValidationError(
-                        err_msg, code=OrderErrorCode.CANNOT_CANCEL_FULFILLMENT
+                        "This fulfillment can't be canceled",
+                        code=OrderErrorCode.CANNOT_CANCEL_FULFILLMENT,
+                    )
+                }
+            )
+        if (
+            fulfillment.status != FulfillmentStatus.WAITING_FOR_APPROVAL
+            and not warehouse
+        ):
+            raise ValidationError(
+                {
+                    "warehouseId": ValidationError(
+                        "This parameter is required for fulfillments which are not in "
+                        "WAITING_FOR_APPROVAL state.",
+                        code=OrderErrorCode.REQUIRED,
                     )
                 }
             )
 
+    @classmethod
+    def validate_order(cls, order):
+        if order_has_gift_card_lines(order):
+            raise ValidationError(
+                {
+                    "fulfillment": ValidationError(
+                        "Cannot cancel fulfillment with gift card lines.",
+                        code=OrderErrorCode.CANNOT_CANCEL_FULFILLMENT.value,
+                    )
+                }
+            )
+
+    @classmethod
+    def perform_mutation(cls, _root, info, **data):
+        fulfillment = cls.get_node_or_error(info, data.get("id"), only_type=Fulfillment)
         order = fulfillment.order
-        cancel_fulfillment(
+
+        cls.validate_order(order)
+
+        warehouse = None
+        if fulfillment.status == FulfillmentStatus.WAITING_FOR_APPROVAL:
+            warehouse = None
+        elif warehouse_id := data.get("input", {}).get("warehouse_id"):
+            warehouse = cls.get_node_or_error(
+                info, warehouse_id, only_type="Warehouse", field="warehouse_id"
+            )
+
+        cls.validate_fulfillment(fulfillment, warehouse)
+
+        if fulfillment.status == FulfillmentStatus.WAITING_FOR_APPROVAL:
+            fulfillment = cancel_waiting_fulfillment(
+                fulfillment,
+                info.context.user,
+                info.context.app,
+                info.context.plugins,
+            )
+        else:
+            fulfillment = cancel_fulfillment(
+                fulfillment,
+                info.context.user,
+                info.context.app,
+                warehouse,
+                info.context.plugins,
+            )
+        order.refresh_from_db(fields=["status"])
+        return FulfillmentCancel(fulfillment=fulfillment, order=order)
+
+
+class FulfillmentApprove(BaseMutation):
+    fulfillment = graphene.Field(Fulfillment, description="An approved fulfillment.")
+    order = graphene.Field(Order, description="Order which fulfillment was approved.")
+
+    class Arguments:
+        id = graphene.ID(required=True, description="ID of a fulfillment to approve.")
+        notify_customer = graphene.Boolean(
+            required=True, description="True if confirmation email should be send."
+        )
+        allow_stock_to_be_exceeded = graphene.Boolean(
+            default_value=False, description="True if stock could be exceeded."
+        )
+
+    class Meta:
+        description = f"{ADDED_IN_31} Approve existing fulfillment."
+        permissions = (OrderPermissions.MANAGE_ORDERS,)
+        error_type_class = OrderError
+        error_type_field = "order_errors"
+
+    @classmethod
+    def clean_input(cls, info, fulfillment):
+        if fulfillment.status != FulfillmentStatus.WAITING_FOR_APPROVAL:
+            raise ValidationError(
+                "Invalid fulfillment status, only WAITING_FOR_APPROVAL "
+                "fulfillments can be accepted.",
+                code=OrderErrorCode.INVALID.value,
+            )
+
+        OrderFulfill.check_lines_for_preorder([line.order_line for line in fulfillment])
+
+        if (
+            not info.context.site.settings.fulfillment_allow_unpaid
+            and not fulfillment.order.is_fully_paid()
+        ):
+            raise ValidationError(
+                "Cannot fulfill unpaid order.",
+                code=OrderErrorCode.CANNOT_FULFILL_UNPAID_ORDER,
+            )
+
+    @classmethod
+    def perform_mutation(cls, _root, info, **data):
+        fulfillment = cls.get_node_or_error(info, data["id"], only_type="Fulfillment")
+        cls.clean_input(info, fulfillment)
+
+        order = fulfillment.order
+        fulfillment = approve_fulfillment(
             fulfillment,
             info.context.user,
             info.context.app,
-            warehouse,
             info.context.plugins,
+            info.context.site.settings,
+            notify_customer=data["notify_customer"],
+            allow_stock_to_be_exceeded=data.get("allow_stock_to_be_exceeded"),
         )
-        fulfillment.refresh_from_db(fields=["status"])
         order.refresh_from_db(fields=["status"])
-        return FulfillmentCancel(fulfillment=fulfillment, order=order)
+        return FulfillmentApprove(fulfillment=fulfillment, order=order)
 
 
 class OrderRefundLineInput(graphene.InputObjectType):
@@ -380,19 +566,32 @@ class FulfillmentRefundAndReturnProductBase(BaseMutation):
         cleaned_input["payment"] = payment
 
     @classmethod
-    def clean_amount_to_refund(cls, amount_to_refund, payment, cleaned_input):
-        if amount_to_refund is not None and amount_to_refund > payment.captured_amount:
-            raise ValidationError(
-                {
-                    "amount_to_refund": ValidationError(
-                        (
-                            "The amountToRefund is greater than the maximal possible "
-                            "amount to refund."
+    def clean_amount_to_refund(cls, order, amount_to_refund, payment, cleaned_input):
+        if amount_to_refund is not None:
+            if order_has_gift_card_lines(order):
+                raise ValidationError(
+                    {
+                        "amount_to_refund": ValidationError(
+                            (
+                                "Cannot specified amount to refund when order has "
+                                "gift card lines."
+                            ),
+                            code=OrderErrorCode.CANNOT_REFUND.value,
+                        )
+                    }
+                )
+            if amount_to_refund > payment.captured_amount:
+                raise ValidationError(
+                    {
+                        "amount_to_refund": ValidationError(
+                            (
+                                "The amountToRefund is greater than the maximal "
+                                "possible amount to refund."
+                            ),
+                            code=OrderErrorCode.CANNOT_REFUND.value,
                         ),
-                        code=OrderErrorCode.CANNOT_REFUND.value,
-                    ),
-                }
-            )
+                    }
+                )
         cleaned_input["amount_to_refund"] = amount_to_refund
 
     @classmethod
@@ -426,6 +625,14 @@ class FulfillmentRefundAndReturnProductBase(BaseMutation):
         cleaned_fulfillment_lines = []
         for line, line_data in zip(fulfillment_lines, fulfillment_lines_data):
             quantity = line_data["quantity"]
+            if line.order_line.is_gift_card:
+                cls._raise_error_for_line(
+                    "Cannot refund or return gift card line.",
+                    "FulfillmentLine",
+                    line.pk,
+                    "fulfillment_line_id",
+                    OrderErrorCode.GIFT_CARD_LINE.value,
+                )
             if line.quantity < quantity:
                 cls._raise_error_for_line(
                     "Provided quantity is bigger than quantity from "
@@ -475,6 +682,14 @@ class FulfillmentRefundAndReturnProductBase(BaseMutation):
         cleaned_order_lines = []
         for line, line_data in zip(order_lines, lines_data):
             quantity = line_data["quantity"]
+            if line.is_gift_card:
+                cls._raise_error_for_line(
+                    "Cannot refund or return gift card line.",
+                    "OrderLine",
+                    line.pk,
+                    "order_line_id",
+                    OrderErrorCode.GIFT_CARD_LINE.value,
+                )
             if line.quantity < quantity:
                 cls._raise_error_for_line(
                     "Provided quantity is bigger than quantity from order line.",
@@ -536,7 +751,7 @@ class FulfillmentRefundProducts(FulfillmentRefundAndReturnProductBase):
         )
         payment = order.get_last_payment()
         cls.clean_order_payment(payment, cleaned_input)
-        cls.clean_amount_to_refund(amount_to_refund, payment, cleaned_input)
+        cls.clean_amount_to_refund(order, amount_to_refund, payment, cleaned_input)
 
         cleaned_input.update(
             {"include_shipping_costs": include_shipping_costs, "order": order}
@@ -554,6 +769,7 @@ class FulfillmentRefundProducts(FulfillmentRefundAndReturnProductBase):
                 whitelisted_statuses=[
                     FulfillmentStatus.FULFILLED,
                     FulfillmentStatus.RETURNED,
+                    FulfillmentStatus.WAITING_FOR_APPROVAL,
                 ],
             )
         return cleaned_input
@@ -562,6 +778,7 @@ class FulfillmentRefundProducts(FulfillmentRefundAndReturnProductBase):
     def perform_mutation(cls, _root, info, **data):
         cleaned_input = cls.clean_input(info, data.get("order"), data.get("input"))
         order = cleaned_input["order"]
+
         refund_fulfillment = create_refund_fulfillment(
             info.context.user,
             info.context.app,
@@ -676,7 +893,7 @@ class FulfillmentReturnProducts(FulfillmentRefundAndReturnProductBase):
         payment = order.get_last_payment()
         if refund:
             cls.clean_order_payment(payment, cleaned_input)
-            cls.clean_amount_to_refund(amount_to_refund, payment, cleaned_input)
+            cls.clean_amount_to_refund(order, amount_to_refund, payment, cleaned_input)
 
         cleaned_input.update(
             {
@@ -698,6 +915,7 @@ class FulfillmentReturnProducts(FulfillmentRefundAndReturnProductBase):
                 whitelisted_statuses=[
                     FulfillmentStatus.FULFILLED,
                     FulfillmentStatus.REFUNDED,
+                    FulfillmentStatus.WAITING_FOR_APPROVAL,
                 ],
             )
         return cleaned_input

@@ -8,6 +8,7 @@ from django.contrib.postgres.search import SearchQuery, SearchRank
 from django.db.models import Exists, F, FloatField, OuterRef, Q, Subquery, Sum
 from django.db.models.fields import IntegerField
 from django.db.models.functions import Cast, Coalesce
+from django.utils import timezone
 from graphene_django.filter import GlobalIDMultipleChoiceFilter
 
 from saleor.vendor.models import VendorWarehouse
@@ -22,6 +23,7 @@ from ...attribute.models import (
     AttributeValue,
 )
 from ...channel.models import Channel
+from ...product import ProductTypeKind
 from ...product.models import (
     Category,
     Collection,
@@ -51,6 +53,7 @@ from .enums import (
     CollectionPublished,
     ProductTypeConfigurable,
     ProductTypeEnum,
+    ProductTypeKindEnum,
     StockAvailability,
 )
 
@@ -58,21 +61,27 @@ T_PRODUCT_FILTER_QUERIES = Dict[int, Iterable[int]]
 
 
 def _clean_product_attributes_filter_input(filter_value, queries):
-    attributes = Attribute.objects.prefetch_related("values")
-    attributes_map: Dict[str, int] = {
-        attribute.slug: attribute.pk for attribute in attributes
-    }
-    values_map: Dict[str, Dict[str, int]] = {
-        attr.slug: {value.slug: value.pk for value in attr.values.all()}
-        for attr in attributes
-    }
+    attributes_slug_pk_map: Dict[str, int] = {}
+    attributes_pk_slug_map: Dict[int, str] = {}
+    values_map: Dict[str, Dict[str, int]] = defaultdict(dict)
+    for attr_slug, attr_pk in Attribute.objects.values_list("slug", "id"):
+        attributes_slug_pk_map[attr_slug] = attr_pk
+        attributes_pk_slug_map[attr_pk] = attr_slug
+
+    for (
+        attr_pk,
+        value_pk,
+        value_slug,
+    ) in AttributeValue.objects.values_list("attribute_id", "pk", "slug"):
+        attr_slug = attributes_pk_slug_map[attr_pk]
+        values_map[attr_slug][value_slug] = value_pk
 
     # Convert attribute:value pairs into a dictionary where
     # attributes are keys and values are grouped in lists
     for attr_name, val_slugs in filter_value:
-        if attr_name not in attributes_map:
+        if attr_name not in attributes_slug_pk_map:
             raise ValueError("Unknown attribute name: %r" % (attr_name,))
-        attr_pk = attributes_map[attr_name]
+        attr_pk = attributes_slug_pk_map[attr_name]
         attr_val_pk = [
             values_map[attr_name][val_slug]
             for val_slug in val_slugs
@@ -378,6 +387,20 @@ def filter_has_category(qs, _, value):
     return qs.filter(category__isnull=not value)
 
 
+def filter_has_preordered_variants(qs, _, value):
+    variants = (
+        ProductVariant.objects.filter(is_preorder=True)
+        .filter(
+            Q(preorder_end_date__isnull=True) | Q(preorder_end_date__gt=timezone.now())
+        )
+        .values("product_id")
+    )
+    if value:
+        return qs.filter(Exists(variants.filter(product_id=OuterRef("pk"))))
+    else:
+        return qs.filter(~Exists(variants.filter(product_id=OuterRef("pk"))))
+
+
 def filter_collections(qs, _, value):
     if value:
         _, collection_pks = resolve_global_ids_to_primary_keys(
@@ -468,6 +491,12 @@ def _filter_collections_is_published(qs, _, value, channel_slug):
     )
 
 
+def filter_gift_card(qs, _, value):
+    product_types = ProductType.objects.filter(kind=ProductTypeKind.GIFT_CARD)
+    lookup = Exists(product_types.filter(id=OuterRef("product_type_id")))
+    return qs.filter(lookup) if value is True else qs.exclude(lookup)
+
+
 def filter_product_type_configurable(qs, _, value):
     if value == ProductTypeConfigurable.CONFIGURABLE:
         qs = qs.filter(has_variants=True)
@@ -522,6 +551,17 @@ def filter_warehouses(qs, _, value):
 
 def filter_sku_list(qs, _, value):
     return qs.filter(sku__in=value)
+
+
+def filter_is_preorder(qs, _, value):
+    if value:
+        return qs.filter(is_preorder=True).filter(
+            Q(preorder_end_date__isnull=True) | Q(preorder_end_date__gte=timezone.now())
+        )
+    return qs.filter(
+        Q(is_preorder=False)
+        | (Q(is_preorder=True)) & Q(preorder_end_date__lt=timezone.now())
+    )
 
 
 def filter_quantity(qs, quantity_value, warehouses=None):
@@ -579,7 +619,11 @@ class ProductFilter(MetadataFilterBase):
     stocks = ObjectTypeFilter(input_class=ProductStockFilterInput, method=filter_stocks)
     vendor = GlobalIDMultipleChoiceFilter(method=filter_vendor_ids)
     search = django_filters.CharFilter(method=filter_search)
+    gift_card = django_filters.BooleanFilter(method=filter_gift_card)
     ids = GlobalIDMultipleChoiceFilter(method=filter_product_ids)
+    has_preordered_variants = django_filters.BooleanFilter(
+        method=filter_has_preordered_variants
+    )
 
     class Meta:
         model = Product
@@ -624,6 +668,7 @@ class ProductVariantFilter(MetadataFilterBase):
         method=filter_fields_containing_value("name", "product__name", "sku")
     )
     sku = ListObjectTypeFilter(input_class=graphene.String, method=filter_sku_list)
+    is_preorder = django_filters.BooleanFilter(method=filter_is_preorder)
 
     class Meta:
         model = ProductVariant
@@ -673,6 +718,7 @@ class ProductTypeFilter(MetadataFilterBase):
     )
 
     product_type = EnumFilter(input_class=ProductTypeEnum, method=filter_product_type)
+    kind = EnumFilter(input_class=ProductTypeKindEnum, method=filter_product_type_kind)
     ids = GlobalIDMultipleChoiceFilter(field_name="id")
 
     class Meta:

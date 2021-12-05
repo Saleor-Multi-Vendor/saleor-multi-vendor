@@ -6,6 +6,7 @@ import pytest
 from ...attribute import AttributeInputType
 from ...attribute.models import AttributeValue
 from ...attribute.utils import associate_attribute_values_to_instance
+from ...product import ProductTypeKind
 from ...product.models import ProductVariantChannelListing
 from ..models import Product, ProductType, ProductVariant
 from ..tasks import _update_variants_names
@@ -16,7 +17,10 @@ from ..utils.variants import generate_and_set_variant_name
 def variant_with_no_attributes(category, channel_USD):
     """Create a variant having no attributes, the same for the parent product."""
     product_type = ProductType.objects.create(
-        name="Test product type", has_variants=True, is_shipping_required=True
+        name="Test product type",
+        has_variants=True,
+        is_shipping_required=True,
+        kind=ProductTypeKind.NORMAL,
     )
     product = Product.objects.create(
         name="Test product",
@@ -204,3 +208,17 @@ def test_update_variants_changed_does_nothing_with_no_attributes():
     saved_attributes = []
     # FIXME: This method no longer returns any value
     assert _update_variants_names(product_type, saved_attributes) is None
+
+
+def test_only_not_variant_selection_attr_left_variant_name_change_to_global_id(product):
+    new_name = "test_name"
+    product_variant = product.variants.first()
+    assert not product_variant.name == new_name
+    product_variant.sku = None
+    product_variant.save()
+    attribute = product.product_type.variant_attributes.first()
+    attribute.input_type = AttributeInputType.MULTISELECT
+    attribute.save(update_fields=["input_type"])
+    _update_variants_names(product.product_type, [attribute])
+    product_variant.refresh_from_db()
+    assert product_variant.name == product_variant.get_global_id()

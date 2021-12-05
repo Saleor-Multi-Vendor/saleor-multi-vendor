@@ -16,7 +16,7 @@ from ..channel.models import Channel
 from ..core.models import ModelWithMetadata
 from ..core.permissions import DiscountPermissions
 from ..core.taxes import display_gross_prices
-from ..core.utils.translations import TranslationProxy
+from ..core.utils.translations import Translation, TranslationProxy
 from . import DiscountValueType, OrderDiscountType, VoucherType
 
 if TYPE_CHECKING:
@@ -63,7 +63,7 @@ class Voucher(ModelWithMetadata):
         max_length=20, choices=VoucherType.CHOICES, default=VoucherType.ENTIRE_ORDER
     )
     name = models.CharField(max_length=255, null=True, blank=True)
-    code = models.CharField(max_length=12, unique=True, db_index=True)
+    code = models.CharField(max_length=16, unique=True, db_index=True)
     usage_limit = models.PositiveIntegerField(null=True, blank=True)
     used = models.PositiveIntegerField(default=0, editable=False)
     start_date = models.DateTimeField(default=timezone.now)
@@ -85,6 +85,7 @@ class Voucher(ModelWithMetadata):
     countries = CountryField(multiple=True, blank=True)
     min_checkout_items_quantity = models.PositiveIntegerField(null=True, blank=True)
     products = models.ManyToManyField("product.Product", blank=True)
+    variants = models.ManyToManyField("product.ProductVariant", blank=True)
     collections = models.ManyToManyField("product.Collection", blank=True)
     categories = models.ManyToManyField("product.Category", blank=True)
 
@@ -223,16 +224,21 @@ class SaleQueryset(models.QuerySet):
         return self.filter(end_date__lt=date, start_date__lt=date)
 
 
-class VoucherTranslation(models.Model):
-    language_code = models.CharField(max_length=10)
-    name = models.CharField(max_length=255, null=True, blank=True)
+class VoucherTranslation(Translation):
     voucher = models.ForeignKey(
         Voucher, related_name="translations", on_delete=models.CASCADE
     )
+    name = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:
         ordering = ("language_code", "voucher", "pk")
         unique_together = (("language_code", "voucher"),)
+
+    def get_translated_object_id(self):
+        return "Voucher", self.voucher_id
+
+    def get_translated_keys(self):
+        return {"name": self.name}
 
 
 class Sale(ModelWithMetadata):
@@ -242,9 +248,10 @@ class Sale(ModelWithMetadata):
         choices=DiscountValueType.CHOICES,
         default=DiscountValueType.FIXED,
     )
-    products = models.ManyToManyField("product.Product", blank=True)
     categories = models.ManyToManyField("product.Category", blank=True)
     collections = models.ManyToManyField("product.Collection", blank=True)
+    products = models.ManyToManyField("product.Product", blank=True)
+    variants = models.ManyToManyField("product.ProductVariant", blank=True)
     start_date = models.DateTimeField(default=timezone.now)
     end_date = models.DateTimeField(null=True, blank=True)
 
@@ -315,8 +322,7 @@ class SaleChannelListing(models.Model):
         ordering = ("pk",)
 
 
-class SaleTranslation(models.Model):
-    language_code = models.CharField(max_length=10)
+class SaleTranslation(Translation):
     name = models.CharField(max_length=255, null=True, blank=True)
     sale = models.ForeignKey(
         Sale, related_name="translations", on_delete=models.CASCADE
@@ -325,6 +331,12 @@ class SaleTranslation(models.Model):
     class Meta:
         ordering = ("language_code", "name", "pk")
         unique_together = (("language_code", "sale"),)
+
+    def get_translated_object_id(self):
+        return "Sale", self.sale_id
+
+    def get_translated_keys(self):
+        return {"name": self.name}
 
 
 class OrderDiscount(models.Model):

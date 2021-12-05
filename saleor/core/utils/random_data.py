@@ -82,8 +82,9 @@ from ...shipping.models import (
     ShippingMethodType,
     ShippingZone,
 )
+from ...warehouse import WarehouseClickAndCollectOption
 from ...warehouse.management import increase_stock
-from ...warehouse.models import Stock, Warehouse
+from ...warehouse.models import PreorderAllocation, Stock, Warehouse
 
 fake = Factory.create()
 fake.seed(0)
@@ -572,7 +573,7 @@ def create_order_lines(order, discounts, how_many=10):
         "variant_id", flat=True
     )
     variants = (
-        ProductVariant.objects.filter(pk__in=available_variant_ids)
+        ProductVariant.objects.filter(pk__in=available_variant_ids, is_preorder=False)
         .order_by("?")
         .prefetch_related("product__product_type")[:how_many]
     )
@@ -580,34 +581,8 @@ def create_order_lines(order, discounts, how_many=10):
     lines = []
     for _ in range(how_many):
         variant = next(variants_iter)
-        variant_channel_listing = variant.channel_listings.get(channel=channel)
-        product = variant.product
-        quantity = random.randrange(1, 5)
-        unit_price = variant.get_price(
-            product,
-            product.collections.all(),
-            channel,
-            variant_channel_listing,
-            discounts,
-        )
-        unit_price = TaxedMoney(net=unit_price, gross=unit_price)
-        total_price = unit_price * quantity
-        lines.append(
-            OrderLine(
-                order=order,
-                product_name=str(product),
-                variant_name=str(variant),
-                product_sku=variant.sku,
-                is_shipping_required=variant.is_shipping_required(),
-                quantity=quantity,
-                variant=variant,
-                unit_price=unit_price,
-                total_price=total_price,
-                undiscounted_unit_price=unit_price,
-                undiscounted_total_price=total_price,
-                tax_rate=0,
-            )
-        )
+        lines.append(_get_new_order_line(order, variant, channel, discounts))
+
     lines = OrderLine.objects.bulk_create(lines)
     manager = get_plugins_manager()
     country = order.shipping_method.shipping_zone.countries[0]
@@ -646,6 +621,101 @@ def create_order_lines(order, discounts, how_many=10):
     return lines
 
 
+def create_order_lines_with_preorder(order, discounts, how_many=1):
+    channel = order.channel
+    available_variant_ids = channel.variant_listings.values_list(
+        "variant_id", flat=True
+    )
+    variants = (
+        ProductVariant.objects.filter(pk__in=available_variant_ids, is_preorder=True)
+        .order_by("?")
+        .prefetch_related("product__product_type")[:how_many]
+    )
+    variants_iter = itertools.cycle(variants)
+    lines = []
+    for _ in range(how_many):
+        variant = next(variants_iter)
+        lines.append(_get_new_order_line(order, variant, channel, discounts))
+
+    lines = OrderLine.objects.bulk_create(lines)
+    manager = get_plugins_manager()
+
+    preorder_allocations = []
+    for line in lines:
+        variant = line.variant
+        unit_price = manager.calculate_order_line_unit(
+            order, line, variant, variant.product
+        )
+        total_price = manager.calculate_order_line_total(
+            order, line, variant, variant.product
+        )
+        line.unit_price = unit_price
+        line.total_price = total_price
+        line.undiscounted_unit_price = unit_price
+        line.undiscounted_total_price = total_price
+        line.tax_rate = unit_price.tax / unit_price.net
+        variant_channel_listing = variant.channel_listings.get(channel=channel)
+        preorder_allocations.append(
+            PreorderAllocation(
+                order_line=line,
+                product_variant_channel_listing=variant_channel_listing,
+                quantity=line.quantity,
+            )
+        )
+    PreorderAllocation.objects.bulk_create(preorder_allocations)
+
+    OrderLine.objects.bulk_update(
+        lines,
+        [
+            "unit_price_net_amount",
+            "unit_price_gross_amount",
+            "undiscounted_unit_price_gross_amount",
+            "undiscounted_unit_price_net_amount",
+            "undiscounted_total_price_gross_amount",
+            "undiscounted_total_price_net_amount",
+            "currency",
+            "tax_rate",
+        ],
+    )
+    return lines
+
+
+def _get_new_order_line(order, variant, channel, discounts):
+    variant_channel_listing = variant.channel_listings.get(channel=channel)
+    product = variant.product
+    quantity = random.randrange(
+        1,
+        variant_channel_listing.preorder_quantity_threshold
+        or variant.preorder_global_threshold
+        or 5,
+    )
+    unit_price = variant.get_price(
+        product,
+        product.collections.all(),
+        channel,
+        variant_channel_listing,
+        discounts,
+    )
+    unit_price = TaxedMoney(net=unit_price, gross=unit_price)
+    total_price = unit_price * quantity
+    return OrderLine(
+        order=order,
+        product_name=str(product),
+        variant_name=str(variant),
+        product_sku=variant.sku,
+        product_variant_id=variant.get_global_id(),
+        is_shipping_required=variant.is_shipping_required(),
+        is_gift_card=variant.is_gift_card(),
+        quantity=quantity,
+        variant=variant,
+        unit_price=unit_price,
+        total_price=total_price,
+        undiscounted_unit_price=unit_price,
+        undiscounted_total_price=total_price,
+        tax_rate=0,
+    )
+
+
 def create_fulfillments(order):
     for line in order.lines.all():
         if random.choice([False, True]):
@@ -664,7 +734,7 @@ def create_fulfillments(order):
     update_order_status(order)
 
 
-def create_fake_order(discounts, max_order_lines=5):
+def create_fake_order(discounts, max_order_lines=5, create_preorder_lines=False):
     channel = Channel.objects.all().order_by("?").first()
     customers = (
         User.objects.filter(is_superuser=False)
@@ -674,7 +744,9 @@ def create_fake_order(discounts, max_order_lines=5):
     customer = random.choice([None, customers.first()])
 
     # 20% chance to be unconfirmed order.
-    will_be_unconfirmed = random.choice([0, 0, 0, 0, 1])
+    will_be_unconfirmed = (
+        random.choice([0, 0, 0, 0, 1]) if not create_preorder_lines else True
+    )
 
     if customer:
         address = customer.default_shipping_address
@@ -692,13 +764,13 @@ def create_fake_order(discounts, max_order_lines=5):
         }
 
     manager = get_plugins_manager()
-    shipping_method_chanel_listing = (
+    shipping_method_channel_listing = (
         ShippingMethodChannelListing.objects.filter(channel=channel)
         .order_by("?")
         .first()
     )
-    shipping_method = shipping_method_chanel_listing.shipping_method
-    shipping_price = shipping_method_chanel_listing.price
+    shipping_method = shipping_method_channel_listing.shipping_method
+    shipping_price = shipping_method_channel_listing.price
     shipping_price = manager.apply_taxes_to_shipping(
         shipping_price, address, channel_slug=channel.slug
     )
@@ -714,7 +786,12 @@ def create_fake_order(discounts, max_order_lines=5):
         order_data["status"] = OrderStatus.UNCONFIRMED
 
     order = Order.objects.create(**order_data)
-    lines = create_order_lines(order, discounts, random.randrange(1, max_order_lines))
+    if create_preorder_lines:
+        lines = create_order_lines_with_preorder(order, discounts)
+    else:
+        lines = create_order_lines(
+            order, discounts, random.randrange(1, max_order_lines)
+        )
     order.total = sum([line.total_price for line in lines], shipping_price)
     weight = Weight(kg=0)
     for line in order.lines.all():
@@ -744,11 +821,14 @@ def create_fake_sale():
         )
     for product in Product.objects.all().order_by("?")[:4]:
         sale.products.add(product)
+
+    for variant in ProductVariant.objects.all().order_by("?")[:2]:
+        sale.variants.add(variant)
     return sale
 
 
 def create_users(user_password, how_many=10):
-    for dummy in range(how_many):
+    for _ in range(how_many):
         user = create_fake_user(user_password)
         yield "User: %s" % (user.email,)
 
@@ -839,14 +919,21 @@ def create_orders(how_many=10):
         yield "Order: %s" % (order,)
 
 
+def create_preorder_orders(how_many=1):
+    discounts = fetch_discounts(timezone.now())
+    for _ in range(how_many):
+        order = create_fake_order(discounts, create_preorder_lines=True)
+        yield "Order: %s" % (order,)
+
+
 def create_product_sales(how_many=5):
-    for dummy in range(how_many):
+    for _ in range(how_many):
         sale = create_fake_sale()
         update_products_discounted_prices_of_discount_task.delay(sale.pk)
         yield "Sale: %s" % (sale,)
 
 
-def create_channel(channel_name, currency_code, slug=None):
+def create_channel(channel_name, currency_code, slug=None, country=None):
     if not slug:
         slug = slugify(channel_name)
     channel, _ = Channel.objects.get_or_create(
@@ -855,6 +942,7 @@ def create_channel(channel_name, currency_code, slug=None):
             "name": channel_name,
             "currency_code": currency_code,
             "is_active": True,
+            "default_country": country,
         },
     )
     return f"Channel: {channel}"
@@ -865,11 +953,9 @@ def create_channels():
         channel_name="Channel-USD",
         currency_code="USD",
         slug=settings.DEFAULT_CHANNEL_SLUG,
+        country=settings.DEFAULT_COUNTRY,
     )
-    yield create_channel(
-        channel_name="Channel-PLN",
-        currency_code="PLN",
-    )
+    yield create_channel(channel_name="Channel-PLN", currency_code="PLN", country="PL")
 
 
 def create_shipping_zone(shipping_methods_names, countries, shipping_zone_name):
@@ -1202,15 +1288,46 @@ def create_shipping_zones():
     )
 
 
+def create_additional_cc_warehouse():
+    shipping_zone = ShippingZone.objects.first()
+    warehouse_name = f"{shipping_zone.name} for click and collect"
+    warehouse, _ = Warehouse.objects.update_or_create(
+        name=warehouse_name,
+        slug=slugify(warehouse_name),
+        defaults={
+            "address": create_address(),
+            "is_private": False,
+            "click_and_collect_option": WarehouseClickAndCollectOption.LOCAL_STOCK,
+        },
+    )
+    warehouse.shipping_zones.add(shipping_zone)
+
+
 def create_warehouses():
     for shipping_zone in ShippingZone.objects.all():
         shipping_zone_name = shipping_zone.name
+        is_private = random.choice([True, False])
+        cc_option = random.choice(
+            [
+                option[0]
+                for option in WarehouseClickAndCollectOption.CHOICES
+                if not (
+                    is_private and option == WarehouseClickAndCollectOption.LOCAL_STOCK
+                )
+            ]
+        )
         warehouse, _ = Warehouse.objects.update_or_create(
             name=shipping_zone_name,
             slug=slugify(shipping_zone_name),
-            defaults={"address": create_address(company_name=fake.company())},
+            defaults={
+                "address": create_address(company_name=fake.company()),
+                "is_private": is_private,
+                "click_and_collect_option": cc_option,
+            },
         )
         warehouse.shipping_zones.add(shipping_zone)
+
+    create_additional_cc_warehouse()
 
 
 def create_vouchers():
@@ -1288,7 +1405,7 @@ def create_gift_card():
     gift_card, created = GiftCard.objects.get_or_create(
         code="Gift_card_10",
         defaults={
-            "user": user,
+            "created_by": user,
             "initial_balance": Money(10, DEFAULT_CURRENCY),
             "current_balance": Money(10, DEFAULT_CURRENCY),
         },

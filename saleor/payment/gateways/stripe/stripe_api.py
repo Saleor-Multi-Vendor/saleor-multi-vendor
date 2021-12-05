@@ -1,7 +1,7 @@
 import logging
 from contextlib import contextmanager
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import stripe
@@ -178,6 +178,25 @@ def create_payment_intent(
         return None, error
 
 
+def update_payment_method(
+    api_key: str,
+    payment_method_id: str,
+    metadata: Dict[str, str],
+):
+    with stripe_opentracing_trace("stripe.PaymentMethod.modify"):
+        try:
+            stripe.PaymentMethod.modify(
+                payment_method_id,
+                api_key=api_key,
+                metadata=metadata,
+            )
+        except StripeError as error:
+            logger.warning(
+                "Failed to assign channel slug to payment method",
+                extra=_extra_log_data(error),
+            )
+
+
 def list_customer_payment_methods(
     api_key: str, customer_id: str
 ) -> Tuple[Optional[StripeObject], Optional[StripeError]]:
@@ -291,7 +310,9 @@ def get_payment_method_details(
         charges_data = charges.get("data", [])
         if not charges_data:
             return None
-        payment_method_details = charges_data[-1]
+        charge_data = charges_data[-1]
+        payment_method_details = charge_data.get("payment_method_details", {})
+
         if payment_method_details.get("type") == "card":
             card_details = payment_method_details.get("card", {})
             exp_year = card_details.get("exp_year", "")

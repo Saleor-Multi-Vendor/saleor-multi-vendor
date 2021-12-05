@@ -1,9 +1,9 @@
 import requests
 from django.contrib.sites.models import Site
-from django.core.exceptions import ValidationError
 
-from ..app.validators import AppURLValidator
-from .models import App, AppInstallation
+from ..core.permissions import get_permission_names
+from .manifest_validations import clean_manifest_data
+from .models import App, AppExtension, AppInstallation
 from .types import AppType
 
 REQUEST_TIMEOUT = 25
@@ -11,21 +11,17 @@ REQUEST_TIMEOUT = 25
 
 def send_app_token(target_url: str, token: str):
     domain = Site.objects.get_current().domain
-    headers = {"x-saleor-domain": domain, "Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        # X- headers will be deprecated in Saleor 4.0, proper headers are without X-
+        "x-saleor-domain": domain,
+        "saleor-domain": domain,
+    }
     json_data = {"auth_token": token}
     response = requests.post(
         target_url, json=json_data, headers=headers, timeout=REQUEST_TIMEOUT
     )
     response.raise_for_status()
-
-
-def validate_manifest_fields(manifest_data):
-    token_target_url = manifest_data.get("tokenTargetUrl")
-    try:
-        url_validator = AppURLValidator()
-        url_validator(token_target_url)
-    except ValidationError:
-        raise ValidationError({"tokenTargetUrl": "Incorrect format."})
 
 
 def install_app(
@@ -34,9 +30,12 @@ def install_app(
 ):
     response = requests.get(app_installation.manifest_url, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
+    assigned_permissions = app_installation.permissions.all()
     manifest_data = response.json()
 
-    validate_manifest_fields(manifest_data)
+    manifest_data["permissions"] = get_permission_names(assigned_permissions)
+
+    clean_manifest_data(manifest_data)
 
     app = App.objects.create(
         name=app_installation.app_name,
@@ -53,6 +52,17 @@ def install_app(
         type=AppType.THIRDPARTY,
     )
     app.permissions.set(app_installation.permissions.all())
+    for extension_data in manifest_data.get("extensions", []):
+        extension = AppExtension.objects.create(
+            app=app,
+            label=extension_data.get("label"),
+            url=extension_data.get("url"),
+            view=extension_data.get("view"),
+            type=extension_data.get("type"),
+            target=extension_data.get("target"),
+        )
+        extension.permissions.set(extension_data.get("permissions", []))
+
     token = app.tokens.create(name="Default token")
 
     try:

@@ -6,7 +6,6 @@ from django.core.exceptions import ValidationError
 from django.core.handlers.wsgi import WSGIRequest
 from django.http import HttpResponse, HttpResponseNotFound
 from django.http.request import split_domain_port
-from stripe.stripe_object import StripeObject
 
 from ....graphql.core.enums import PluginErrorCode
 from ....plugins.base_plugin import BasePlugin, ConfigurationTypeField
@@ -17,6 +16,7 @@ from ...interface import (
     GatewayResponse,
     PaymentData,
     PaymentMethodInfo,
+    StorePaymentMethodEnum,
 )
 from ...models import Transaction
 from ...utils import price_from_minor_unit, price_to_minor_unit
@@ -122,7 +122,7 @@ class StripeGatewayPlugin(BasePlugin):
     def webhook(self, request: WSGIRequest, path: str, previous_value) -> HttpResponse:
         config = self.config
         if path.startswith(WEBHOOK_PATH, 1):  # 1 as we don't check the '/'
-            return handle_webhook(request, config)
+            return handle_webhook(request, config, self.channel.slug)  # type: ignore
         logger.warning(
             "Received request to incorrect stripe path", extra={"path": path}
         )
@@ -162,6 +162,16 @@ class StripeGatewayPlugin(BasePlugin):
 
         return kind, action_required
 
+    def _get_setup_future_usage_from_store_payment_method(
+        self, store_payment_method: StorePaymentMethodEnum
+    ) -> Optional[str]:
+        if store_payment_method == StorePaymentMethodEnum.ON_SESSION:
+            return "on_session"
+        elif store_payment_method == StorePaymentMethodEnum.OFF_SESSION:
+            return "off_session"
+        else:
+            return None
+
     @require_active_plugin
     def process_payment(
         self, payment_information: "PaymentData", previous_value
@@ -178,12 +188,18 @@ class StripeGatewayPlugin(BasePlugin):
         payment_method_id = data.get("payment_method_id") if data else None
 
         setup_future_usage = None
+        # DEPRECATED: reuse_source will be removed in Saleor 4.0
         if payment_information.reuse_source:
             setup_future_usage = data.get("setup_future_usage") if data else None
 
         off_session = data.get("off_session") if data else None
 
         payment_method_types = data.get("payment_method_types") if data else None
+
+        if not setup_future_usage:
+            setup_future_usage = self._get_setup_future_usage_from_store_payment_method(
+                payment_information.store_payment_method
+            )
 
         customer = None
         # confirm that we creates customer on stripe side only for log-in customers
@@ -203,6 +219,7 @@ class StripeGatewayPlugin(BasePlugin):
             customer=customer,
             payment_method_id=payment_method_id,
             metadata={
+                **payment_information.payment_metadata,
                 "channel": self.channel.slug,  # type: ignore
                 "payment_id": payment_information.graphql_payment_id,
             },
@@ -212,14 +229,17 @@ class StripeGatewayPlugin(BasePlugin):
             customer_email=payment_information.customer_email,
         )
 
-        if error and payment_method_id and not intent:
-            # we can receive an error which is caused by a required authentication
-            # but stripe already created payment_intent.
-            stripe_error = error.error
-            intent = getattr(stripe_error, "payment_intent", None)
-            error = None if intent else error
-
         raw_response = None
+        if error:
+            raw_response = getattr(error, "json_body", None)
+            if payment_method_id and not intent:
+                # we can receive an error which is caused by a required authentication
+                # but stripe already created payment_intent.
+                if error.code == "authentication_required":
+                    stripe_error = error.error
+                    intent = getattr(stripe_error, "payment_intent", None)
+                error = None if intent else error
+
         client_secret = None
         intent_id = None
         kind = TransactionKind.ACTION_TO_CONFIRM
@@ -229,7 +249,8 @@ class StripeGatewayPlugin(BasePlugin):
                 intent.status
             )
             client_secret = intent.client_secret
-            raw_response = intent.last_response.data
+            last_response = intent.last_response
+            raw_response = last_response.data if last_response else None
             intent_id = intent.id
 
         return GatewayResponse(
@@ -295,8 +316,10 @@ class StripeGatewayPlugin(BasePlugin):
             kind, action_required = self._get_transaction_details_for_stripe_status(
                 payment_intent.status
             )
+
             if kind == TransactionKind.CAPTURE:
                 payment_method_info = get_payment_method_details(payment_intent)
+
         else:
             action_required = False
             amount = payment_information.amount
@@ -419,17 +442,18 @@ class StripeGatewayPlugin(BasePlugin):
         if payment_methods:
             customer_sources = [
                 CustomerSource(
-                    id=c.id,
+                    id=payment_method.id,
                     gateway=PLUGIN_ID,
                     credit_card_info=PaymentMethodInfo(
-                        exp_year=c.card.exp_year,
-                        exp_month=c.card.exp_month,
-                        last_4=c.card.last4,
+                        exp_year=payment_method.card.exp_year,
+                        exp_month=payment_method.card.exp_month,
+                        last_4=payment_method.card.last4,
                         name=None,
-                        brand=c.card.brand,
+                        brand=payment_method.card.brand,
                     ),
+                    metadata=payment_method.metadata,
                 )
-                for c in payment_methods
+                for payment_method in payment_methods
             ]
             previous_value.extend(customer_sources)
         return previous_value

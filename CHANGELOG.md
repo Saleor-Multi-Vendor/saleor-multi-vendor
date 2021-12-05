@@ -2,8 +2,30 @@
 
 All notable, unreleased changes to this project will be documented in this file. For the released changes, please visit the [Releases](https://github.com/mirumee/saleor/releases) page.
 
-## [Unreleased]
+# 3.1.0 [Unreleased]
+- Extend app by `AppExtension` - #7701 by @korycins
+- Deprecate interface field `PaymentData.reuse_source` - #7988 by @mateuszgrzyb
+- Add ExternalNotificationTrigger mutation - #7821 by @mstrumeck
+- Add Click&Collect feature - #7673 by @kuchichan
+- Introduce swatch attributes - #7261 by @IKarbowiak
+- Introduce gift card feature - #7827 by @IKarbowiak, @tomaszszymanski129
+- Deprecate `setup_future_usage` from `checkoutComplete.paymentData` input - will be removed in Saleor 4.0 - #7994 by @mateuszgrzyb
+- Possibility to pass metadata in input of `checkoutPaymentCreate` - #8076 by @mateuszgrzyb
+- Fix shipping address issue in `availableCollectionPoints` resolver for checkout - #8143 by @kuchichan
+- Improve draft orders and orders webhooks by @jakubkuc
+- Fix cursor-based pagination in products search - #8011 by @rafalp
+- Extend `accountRegister` mutation to consume first & last name - #8184 by @piotrgrundas
+- Introduce sales / vouchers per product variant - #8064 by @kuchichan
+- Introduce sales webhooks - #8157 @kuchichan
 
+# 3.0.0 [Unreleased]
+
+- Improve draft orders and orders webhooks - #SALEOR-4008 by @jakubkuc
+- Mark `X-` headers as deprecated and add headers without prefix. All deprecated headers will be removed in Saleor 4.0 - #8179 by @L3str4nge
+    * X-Saleor-Event -> Saleor-Event
+    * X-Saleor-Domain -> Saleor-Domain
+    * X-Saleor-Signature -> Saleor-Signature
+    * X-Saleor-HMAC-SHA256 -> Saleor-HMAC-SHA256
 - Extend editorjs validator to accept blocks different than text - #SALEOR-3354 by @mociepka
 - Add query contains only schema validation - #6827 by @fowczarek
 - Add introspection caching - #6871 by @fowczarek
@@ -127,8 +149,23 @@ All notable, unreleased changes to this project will be documented in this file.
 - Fix failing account mutations for app - #7569 by @IKarbowiak
 - Modify order of auth middleware calls - #7572 by @tomaszszymanski129
 - Add app support for events - #7622 by @IKarbowiak
+- Fulfillment confirmation - #7675 by @tomaszszymanski129
 - Add date & date time attributes - #7500 by @piotrgrundas
 - Add `withChoices` flag for Attribute type - #7733 by @dexon44
+- Drop assigning cheapest shipping method in checkout - #7767 by @maarcingebala
+- Add `product_id`, `product_variant_id`, `attribute_id` and `page_id` when it's possible for `AttributeValue` translations webhook. - #7783 by @fowczarek
+- Deprecate `query` argument in `sales` and `vouchers` queries - #7806 by @maarcingebala
+- Allow translating objects by translatable content ID - #7803 by @maarcingebala
+- Add `page_type_id` when it's possible for `AttributeValue` translations webhook. - #7825 by @fowczarek
+- Optimize available quantity loader. - #7802 by @fowczarek
+- Configure a periodic task for removing empty allocations - #7885 by @fowczarek
+- Add webhooks for stock changes: `PRODUCT_VARIANT_OUT_OF_STOCK` and `PRODUCT_VARIANT_BACK_IN_STOCK`  - #7590 by @mstrumeck
+- Allow impersonating user by an app/staff - #7754 by @korycins:
+  - Add `customerId` to `checkoutCustomerAttach` mutation
+  - Add new permision `IMPERSONATE_USER`
+  - Handle `SameSite` cookie attribute in jwt refresh token middleware - #8209 by @jakubkuc
+
+
 
 ### Breaking
 - Multichannel MVP: Multicurrency - #6242 by @fowczarek @d-wysocki
@@ -234,6 +271,7 @@ All notable, unreleased changes to this project will be documented in this file.
 - Use root level channel argument for filtering and sorting - #7374 by @IKarbowiak
   - drop `channel` field from filters and sorters
 - Drop top-level `checkoutLine` query from the schema with related resolver, use `checkout` query instead - #7623 by @dexon44
+- Make SKU an optional field on `ProductVariant` - #7633 by @rafalp
 
 ### Other
 

@@ -1,10 +1,9 @@
 from datetime import date
-from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple
 
 from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.utils.encoding import smart_text
 from prices import TaxedMoney
 
 from ..account.error_codes import AccountErrorCode
@@ -25,6 +24,7 @@ from ..discount.utils import (
     remove_voucher_usage_by_customer,
 )
 from ..giftcard.models import GiftCard
+from ..giftcard.utils import fulfill_non_shippable_gift_cards
 from ..graphql.checkout.utils import (
     prepare_insufficient_stock_checkout_validation_error,
 )
@@ -36,8 +36,8 @@ from ..payment import PaymentError, gateway
 from ..payment.models import Payment, Transaction
 from ..payment.utils import fetch_customer_id, store_customer_id
 from ..product.models import ProductTranslation, ProductVariantTranslation
-from ..warehouse.availability import check_stock_quantity_bulk
-from ..warehouse.management import allocate_stocks
+from ..warehouse.availability import check_stock_and_preorder_quantity_bulk
+from ..warehouse.management import allocate_preorders, allocate_stocks
 from . import AddressType
 from .checkout_cleaner import clean_checkout_payment, clean_checkout_shipping
 from .models import Checkout
@@ -66,7 +66,8 @@ def _get_voucher_data_for_order(checkout_info: "CheckoutInfo") -> dict:
     if not voucher:
         return {}
 
-    increase_voucher_usage(voucher)
+    if voucher.usage_limit:
+        increase_voucher_usage(voucher)
     if voucher.apply_once_per_customer:
         add_voucher_usage_by_customer(voucher, checkout_info.get_customer_email())
     return {
@@ -79,9 +80,14 @@ def _process_shipping_data_for_order(
     shipping_price: TaxedMoney,
     manager: "PluginsManager",
     lines: Iterable["CheckoutLineInfo"],
-) -> dict:
+) -> Dict[str, Any]:
     """Fetch, process and return shipping data from checkout."""
-    shipping_address = checkout_info.shipping_address
+    delivery_method_info = checkout_info.delivery_method_info
+    shipping_address = delivery_method_info.shipping_address
+
+    delivery_method_dict = {
+        delivery_method_info.order_key: delivery_method_info.delivery_method
+    }
 
     if checkout_info.user and shipping_address:
         store_user_address(
@@ -90,13 +96,15 @@ def _process_shipping_data_for_order(
         if checkout_info.user.addresses.filter(pk=shipping_address.pk).exists():
             shipping_address = shipping_address.get_copy()
 
-    return {
+    result: Dict[str, Any] = {
         "shipping_address": shipping_address,
-        "shipping_method": checkout_info.shipping_method,
-        "shipping_method_name": smart_text(checkout_info.shipping_method),
         "shipping_price": shipping_price,
         "weight": checkout_info.checkout.get_total_weight(lines),
     }
+    result.update(delivery_method_dict)
+    result.update(delivery_method_info.delivery_method_name)
+
+    return result
 
 
 def _process_user_data_for_order(checkout_info: "CheckoutInfo", manager):
@@ -189,15 +197,21 @@ def _create_line_for_order(
         translated_product_name=translated_product_name,
         translated_variant_name=translated_variant_name,
         product_sku=variant.sku,
+        product_variant_id=variant.get_global_id(),
         is_shipping_required=variant.is_shipping_required(),
+        is_gift_card=variant.is_gift_card(),
         quantity=quantity,
         variant=variant,
         unit_price=unit_price,  # type: ignore
         total_price=total_line_price,
         tax_rate=tax_rate,
     )
-
-    line_info = OrderLineData(line=line, quantity=quantity, variant=variant)
+    line_info = OrderLineData(
+        line=line,
+        quantity=quantity,
+        variant=variant,
+        warehouse_pk=checkout_info.delivery_method_info.warehouse_pk,
+    )
 
     return line_info
 
@@ -239,8 +253,15 @@ def _create_lines_for_order(
         for variant_translation in variants_translation
     }
 
-    check_stock_quantity_bulk(
-        variants, country_code, quantities, checkout_info.channel.slug
+    additional_warehouse_lookup = (
+        checkout_info.delivery_method_info.get_warehouse_filter_lookup()
+    )
+    check_stock_and_preorder_quantity_bulk(
+        variants,
+        country_code,
+        quantities,
+        checkout_info.channel.slug,
+        additional_warehouse_lookup,
     )
 
     return [
@@ -318,8 +339,6 @@ def _prepare_order_data(
     # Get voucher data (last) as they require a transaction
     order_data.update(_get_voucher_data_for_order(checkout_info))
 
-    # assign gift cards to the order
-
     order_data["total_price_left"] = (
         manager.calculate_checkout_subtotal(checkout_info, lines, address, discounts)
         + shipping_total
@@ -351,7 +370,7 @@ def _create_order(
     Current user's language is saved in the order so we can later determine
     which language to use when sending email.
     """
-    from ..order.utils import add_gift_card_to_order
+    from ..order.utils import add_gift_cards_to_order
 
     checkout = checkout_info.checkout
     order = Order.objects.filter(checkout_token=checkout.token).first()
@@ -399,11 +418,19 @@ def _create_order(
     OrderLine.objects.bulk_create(order_lines)
 
     country_code = checkout_info.get_country()
-    allocate_stocks(order_lines_info, country_code, checkout_info.channel.slug)
+    additional_warehouse_lookup = (
+        checkout_info.delivery_method_info.get_warehouse_filter_lookup()
+    )
+    allocate_stocks(
+        order_lines_info,
+        country_code,
+        checkout_info.channel.slug,
+        manager,
+        additional_warehouse_lookup,
+    )
+    allocate_preorders(order_lines_info, checkout_info.channel.slug)
 
-    # Add gift cards to the order
-    for gift_card in checkout.gift_cards.select_for_update():
-        total_price_left = add_gift_card_to_order(order, gift_card, total_price_left)
+    add_gift_cards_to_order(checkout_info, order, total_price_left, user, app)
 
     # assign checkout payments to the order
     checkout.payments.update(order=order)
@@ -414,6 +441,11 @@ def _create_order(
     order.private_metadata = checkout.private_metadata
     order.update_total_paid()
     order.save()
+
+    if site_settings.automatically_fulfill_non_shippable_gift_card:
+        fulfill_non_shippable_gift_cards(
+            order, order_lines, site_settings, user, app, manager
+        )
 
     transaction.on_commit(
         lambda: order_created(order=order, user=user, app=app, manager=manager)
@@ -480,7 +512,7 @@ def _prepare_checkout(
 
 def release_voucher_usage(order_data: dict):
     voucher = order_data.get("voucher")
-    if voucher:
+    if voucher and voucher.usage_limit:
         decrease_voucher_usage(voucher)
         if "user_email" in order_data:
             remove_voucher_usage_by_customer(voucher, order_data["user_email"])
