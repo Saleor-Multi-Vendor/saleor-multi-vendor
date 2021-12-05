@@ -10,6 +10,8 @@ from django.db.models.fields import IntegerField
 from django.db.models.functions import Cast, Coalesce
 from graphene_django.filter import GlobalIDMultipleChoiceFilter
 
+from saleor.vendor.models import VendorWarehouse
+
 from ...attribute import AttributeInputType
 from ...attribute.models import (
     AssignedProductAttribute,
@@ -43,6 +45,7 @@ from ..core.types.common import IntRangeInput, PriceRangeInput
 from ..utils import resolve_global_ids_to_primary_keys
 from ..utils.filters import filter_fields_containing_value, filter_range_field
 from ..warehouse import types as warehouse_types
+from ..vendor import types as vendor_types
 from . import types as product_types
 from .enums import (
     CollectionPublished,
@@ -481,6 +484,20 @@ def filter_product_type(qs, _, value):
     return qs
 
 
+def filter_product_type_kind(qs, _, value):
+    if value:
+        qs = qs.filter(kind=value)
+    return qs
+
+def filter_vendor_ids(qs, _, value):
+    _,vendor_ids = resolve_global_ids_to_primary_keys(
+        value,vendor_types.Vendor
+    )
+    vendor_warehouse = VendorWarehouse.objects.filter(vendor_id__pk__in=vendor_ids).values_list('warehouse',flat=True)
+    print(vendor_warehouse)
+    return qs.filter(variants__stocks__warehouse__pk__in=vendor_warehouse)
+
+
 def filter_stocks(qs, _, value):
     warehouse_ids = value.get("warehouse_ids")
     quantity = value.get("quantity")
@@ -560,6 +577,7 @@ class ProductFilter(MetadataFilterBase):
     )
     product_types = GlobalIDMultipleChoiceFilter(method=filter_product_types)
     stocks = ObjectTypeFilter(input_class=ProductStockFilterInput, method=filter_stocks)
+    vendor = GlobalIDMultipleChoiceFilter(method=filter_vendor_ids)
     search = django_filters.CharFilter(method=filter_search)
     ids = GlobalIDMultipleChoiceFilter(method=filter_product_ids)
 
