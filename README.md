@@ -1,159 +1,61 @@
-![Saleor Commerce - A GraphQL-first platform for perfectionists](https://user-images.githubusercontent.com/249912/71523206-4e45f800-28c8-11ea-84ba-345a9bfc998a.png)
+# Saleor Multi Vendor (Marketplace) Addon
+Multi Vendor Plugin for Saleor e-Commerce
 
-<div align="center">
-  <h1>Saleor Commerce</h1>
-</div>
+# Use issues to get an invite. [Live Chat at Gitter](https://gitter.im/Saleor-Multi-Vendor/community)
 
-<div align="center">
-  <strong>Customer-centric e-commerce on a modern stack</strong>
-</div>
+# A Kickstarter campaign will start soon to get a budged for developers.
 
-<div align="center">
-  A headless, GraphQL commerce platform delivering ultra-fast, dynamic, personalized shopping experiences. Beautiful online stores, anywhere, on any device.
-</div>
+Short Analysis:
 
-<br>
+Pre-requirements.
+- There isn't a latitude or longitude anywhere. Coordinates are required to calculate shipping cost. - We need to record all the product information to order_line to ensure seller send right product and be able to check product properties and photos recorded at checkout time.
 
-<div align="center">
-  Join our active, engaged community: <br>
-  <a href="https://saleor.io/">Website</a>
-  <span> | </span>
-  <a href="https://medium.com/saleor">Blog</a>
-  <span> | </span>
-  <a href="https://twitter.com/getsaleor">Twitter</a>
-  <span> | </span>
-  <a href="https://gitter.im/mirumee/saleor">Gitter</a>
-  <span> | </span>
-  <a href="https://github.com/mirumee/saleor/discussions">GitHub Discussions</a>
-</div>
+Multi Vendor Plugin Implementation
 
-<br>
+Let's check a success plugin in ruby ecosystem and learn best practices. [Spree Multi Vendor Plugin](https://github.com/spree-contrib/spree_multi_vendor)
 
-<div align="center">
-  <a href="http://codecov.io/github/mirumee/saleor?branch=master">
-    <img src="http://codecov.io/github/mirumee/saleor/coverage.svg?branch=master" alt="Codecov" />
-  </a>
-  <a href="https://docs.saleor.io/">
-    <img src="https://img.shields.io/badge/docs-docs.saleor.io-brightgreen.svg" alt="Documentation" />
-  </a>
-  <a href="https://github.com/python/black">
-    <img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Code style: black">
-  </a>
-</div>
+Let's start with database.
+![ERD](https://user-images.githubusercontent.com/9559372/85078411-0fd12c00-b1cd-11ea-95ae-da0574904242.png)
 
-## Table of Contents
+We already know the Saleor feature set but database shows what actually happening.
 
-- [What makes Saleor special?](#what-makes-saleor-special)
-- [Features](#features)
-- [Installation](#installation)
-- [Documentation](#documentation)
-- [Demo](#demo)
-- [Contributing](#contributing)
-- [Translations](#translations)
-- [Your feedback](#your-feedback)
-- [License](#license)
+Defining the feature set for Vendors:
+- Which features are belong to the super admin?
+- Which features are belong to the vendor?
 
-## What makes Saleor special?
+Methodology:
+- Using polymorphism.
+- Using vendor scope
+- Using vendor role
 
-Saleor is a rapidly-growing open source e-commerce platform that has served high-volume companies from branches like publishing and apparel since 2012. Based on Python and Django, the latest major update introduces a modular front end powered by a GraphQL API and written with React and TypeScript.
+Pluses:
+- Current warehouse system:
+With current warehouse system our implementation will be more easy. Because each vendor will have at least one warehouse. So we don't need to modify all the application. We only to add some foreign keys to db and creating a little code as plugin.
 
-## Features
+A marketplace requirement at production:
+- Vendor data management in dashboard by super admin or vendor's own. Such as name, profile picture, company details, payout account, etc.
+- Stripe Connect as payment integration to control payments and refunds.
+- A product can be posted by several vendors. We can have same variants from different vendors. We need to be able to make price comparison and show other sellers price.
 
-- **PWA**: End users can shop offline for better sales and shopping experiences
-- **GraphQL API**: Access all data from any web or mobile client using the latest technology
-- **Headless commerce**: Build mobile apps, customize storefronts and externalize processes
-- **UX and UI**: Designed for a user experience that rivals even the top commercial platforms
-- **Dashboard**: Administrators have total control of users, processes, and products
-- **Orders**: A comprehensive system for orders, dispatch, and refunds
-- **Cart**: Advanced payment and tax options, with full control over discounts and promotions
-- **Payments**: Flexible API architecture allows integration of any payment method. It comes with Braintree support out of the box.
-- **Geo-adaptive**: Automatic localized pricing. Over 20 local languages. Localized checkout experience by country.
-- **SEO**: Packed with features that get stores to a wider audience
-- **Cloud**: Optimized for deployments using Docker
-- **Analytics**: Server-side Google Analytics to report e-commerce metrics without affecting privacy
+Technical equality of these requirements.
+- Stripe Connect gateway
+- State machine for payments
+- Vendor_Id as scope in products, variants, variant_photos, order_items, fulfillments
+- Custom logic described below.
 
-Saleor is free and always will be.
-Help us out… If you love free stuff and great software, give us a star! 🌟
+Application logic:
 
-![Saleor Storefront - React-based PWA e-commerce storefront](https://user-images.githubusercontent.com/249912/71527146-5b6be280-28da-11ea-901d-eb76161a6bfb.png)
-![Saleor Dashboard - Modern UI for managing your e-commerce](https://user-images.githubusercontent.com/249912/71523261-8a795880-28c8-11ea-98c0-6281ea37f412.png)
+General:
+- The vendor role will only have permissions to manage their orders and shippings.
+- All the order items, shippings, fulfillments must be grouped for each vendor in the order.
+- Vendor's fulfillments will be already done with current warehouse logic.
+- Buttons to change fulfillment status to move payment across buyer and seller.
 
-## Installation
+Dashboard:
+- If a user have vendor role the controllers use the vendor_id to filter scope and only return vendor's data. Eg: Vendors will only see their orders and shippings.
 
-Saleor requires Python 3.8, Node.js 10.0+, PostgreSQL and OS-specific dependency tools.
+Store Front
+- We must be able to use vendor_id as filter.
+- Product page must show the vendor's name.
 
-[See the Saleor docs](https://docs.saleor.io/docs/developer/installation) for step-by-step installation and deployment instructions.
-
-Note:
-The `master` branch is the development version of Saleor and it may be unstable. To use the latest stable version, download it from the [Releases](https://github.com/mirumee/saleor/releases/) page or switch to a release tag.
-
-The current stable version is 2.11 and you should use this version for all three components:
-
-- Saleor: https://github.com/mirumee/saleor/releases/tag/2.11.1
-- Dashboard: https://github.com/mirumee/saleor-dashboard/releases/tag/2.11.1
-- Storefront: https://github.com/mirumee/saleor-storefront/releases/tag/2.11.0
-
-## Documentation
-
-Saleor documentation is available here: [docs.saleor.io](https://docs.saleor.io)
-
-To contribute, please see the [`mirumee/saleor-docs` repository](https://github.com/mirumee/saleor-docs/).
-
-## Saleor Platform
-
-The easiest way to run all components of Saleor (API, storefront and dashboard) together on your local machine is to use the [saleor-platform](https://github.com/mirumee/saleor-platform) project. Go to that repository for instructions on how to use it.
-
-[View saleor-platform](https://github.com/mirumee/saleor-platform)
-
-## Storefront
-
-For PWA, single-page storefront go to the [saleor-storefront](https://github.com/mirumee/saleor-storefront) repository.
-
-[View storefront demo](https://demo.saleor.io/)
-
-## Dashboard
-
-For dashboard go to the [saleor-dashboard](https://github.com/mirumee/saleor-dashboard) repository.
-
-[View dashboard demo](https://demo.saleor.io/dashboard/)
-
-## Demo
-
-Want to see Saleor in action?
-
-[View Storefront](https://demo.saleor.io/) | [View Dashboard (admin area)](https://demo.saleor.io/dashboard/)
-
-Or launch the demo on a free Heroku instance.
-
-[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy)
-
-Login credentials: `admin@example.com`/`admin`
-
-## Contributing
-
-We love your contributions and do our best to provide you with mentorship and support. If you are looking for an issue to tackle, take a look at issues labeled [`Help Wanted`](https://github.com/mirumee/saleor/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22).
-
-If nothing grabs your attention, check [our roadmap](https://github.com/mirumee/saleor/projects/12) or come up with your feature. Just drop us a line or [open an issue](https://github.com/mirumee/saleor/issues/new) and we’ll work out how to handle it.
-
-Get more details in our [Contributing Guide](https://docs.saleor.io/docs/developer/community/contributing).
-
-## Legacy views
-
-If you're interested in using the old version of Saleor, go the [legacy-views](https://github.com/mirumee/legacy-views) repository. It contains the 2.9.0 release, which includes Django-based views and HTML templates of Storefront 1.0 and Dashboard 1.0. Note: this version of Saleor is no longer officially maintained.
-
-## Your feedback
-
-Do you use Saleor as an e-commerce platform?
-Fill out this short survey and help us grow. It will take just a minute, but mean a lot!
-
-[Take a survey](https://mirumee.typeform.com/to/sOIJbJ)
-
-## License
-
-Disclaimer: Everything you see here is open and free to use as long as you comply with the [license](https://github.com/mirumee/saleor/blob/master/LICENSE). There are no hidden charges. We promise to do our best to fix bugs and improve the code.
-
-Some situations do call for extra code; we can cover exotic use cases or build you a custom e-commerce appliance.
-
-#### Crafted with ❤️ by [Mirumee Software](http://mirumee.com)
-
-hello@mirumee.com
+So as you can see in spree plugin, this implementation can be done with less than 1000 line of code. I am Ruby on Rails expert, never tried Django before. But I am super impressed to use Saleor as marketplace. If anybody want to work on this feature, we can schedule our times. Thank you!
