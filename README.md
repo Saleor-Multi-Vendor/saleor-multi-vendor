@@ -6,6 +6,7 @@ Multi Vendor Plugin for Saleor e-Commerce
 # Donate to this project on [Open Collective](https://opencollective.com/saleor-marketplace#category-BUDGET)
 
 ## There is no stable release yet. Get help on gitter chat.
+
 ## We are looking for contributors. Use issues to get an invite to organization. 
 
 Short Analysis:
