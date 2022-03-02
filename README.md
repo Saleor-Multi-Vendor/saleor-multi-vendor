@@ -3,9 +3,10 @@ Multi Vendor Plugin for Saleor e-Commerce
 
 # [Live Chat at Gitter](https://gitter.im/Saleor-Multi-Vendor/community)
 # [Project Board at Github](https://github.com/Saleor-Multi-Vendor/saleor-multi-vendor/projects/1)
-# Support this project on [Open Collective](https://opencollective.com/saleor-marketplace#category-BUDGET)
+# Donate to this project on [Open Collective](https://opencollective.com/saleor-marketplace#category-BUDGET)
 
-## Use issues to get an invite. 
+## There is no stable release yet. Get help on gitter chat.
+## We are looking for contributors. Use issues to get an invite to organization. 
 
 Short Analysis:
 
