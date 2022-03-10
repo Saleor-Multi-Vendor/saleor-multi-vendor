@@ -21,7 +21,7 @@ class VendorCreate(ModelMutation, I18nMixin):
     class Meta:
         description = "Create new Vendor"
         model = models.Vendor
-        permissions = (VendorPermissions.MANAGE_VENDOR,)
+        # permissions = (VendorPermissions.MANAGE_VENDOR,)
         error_type_class = VendorError
         error_type_field = "vendor_errors"
     
@@ -72,7 +72,7 @@ class VendorWarehouseCreate(ModelMutation, I18nMixin):
     class Meta:
         description = "Create new Vendor Warehouse"
         model = models.VendorWarehouse
-        permissions = (VendorPermissions.MANAGE_VENDOR,)
+        # permissions = (VendorPermissions.MANAGE_VENDOR,)
         error_type_class = VendorError
         error_type_field = "vendor_errors"
 
