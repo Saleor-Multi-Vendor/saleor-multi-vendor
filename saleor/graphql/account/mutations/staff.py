@@ -2,8 +2,8 @@ from collections import defaultdict
 from copy import copy
 
 import graphene
-from django.core.exceptions import ValidationError
 from django.contrib.auth import password_validation
+from django.core.exceptions import ValidationError
 
 from ....account import events as account_events
 from ....account import models, utils
@@ -57,6 +57,7 @@ class StaffCreateInput(StaffInput):
         )
     )
 
+
 class StaffVendorCreateInput(StaffInput):
     redirect_url = graphene.String(
         description=(
@@ -65,6 +66,7 @@ class StaffVendorCreateInput(StaffInput):
         )
     )
     password = graphene.String(description="Password.", required=True)
+
 
 class StaffUpdateInput(StaffInput):
     remove_groups = graphene.List(
@@ -291,13 +293,13 @@ class VendorStaffCreate(StaffCreate):
         except ValidationError as error:
             raise ValidationError({"password": error})
         return super().clean_input(info, instance, data)
-    
+
     @classmethod
     def save(cls, info, user, cleaned_input):
         password = cleaned_input["password"]
         user.set_password(password)
         super().save(info, user, cleaned_input)
-        
+
 
 class StaffUpdate(StaffCreate):
     class Arguments:
