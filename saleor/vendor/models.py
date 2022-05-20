@@ -4,7 +4,7 @@ from django.db import models
 from saleor.core.permissions import VendorPermissions
 
 # Create your models here.
-from ..warehouse.models import Allocation, Warehouse
+from ..warehouse.models import Warehouse
 
 
 class Vendor(models.Model):
@@ -13,8 +13,8 @@ class Vendor(models.Model):
     # TODO: Define fields here
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
-        blank=True,
-        null=True,
+        # blank=True,
+        # null=True,
         related_name="vendor_user",
         on_delete=models.CASCADE,
     )
@@ -24,7 +24,7 @@ class Vendor(models.Model):
     # or here is a dirty little trick to make manytomany
     # into one to many
 
-    allocation = models.ManyToManyField(Allocation, related_name="vendor_allocation")
+    # allocation = models.ManyToManyField(Allocation, related_name="vendor_allocation")
     shop_name = models.CharField(max_length=256)
     slug = models.SlugField(max_length=255, unique=True, allow_unicode=True)
     # def save(self, *args, **kwargs):

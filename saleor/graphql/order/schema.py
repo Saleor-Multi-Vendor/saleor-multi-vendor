@@ -122,7 +122,7 @@ class OrderQueries(graphene.ObjectType):
 
     @permission_required(OrderPermissions.MANAGE_ORDERS)
     def resolve_orders(self, info, channel=None, **_kwargs):
-        return resolve_orders(info, channel)
+        return resolve_orders(info, channel, **_kwargs)
 
     @permission_required(OrderPermissions.MANAGE_ORDERS)
     def resolve_draft_orders(self, info, **_kwargs):

@@ -12,6 +12,7 @@ from ..core.utils import from_global_id_or_error
 from ..payment.enums import PaymentChargeStatusEnum
 from ..utils import resolve_global_ids_to_primary_keys
 from ..utils.filters import filter_range_field
+from ..vendor import types as vendor_types
 from .enums import OrderStatusFilter
 
 
@@ -66,6 +67,16 @@ def filter_customer(qs, _, value):
         | Q(user__last_name__trigram_similar=value)
     )
     return qs
+
+
+def filter_vendor_ids(qs, _, value):
+    _, vendor_ids = resolve_global_ids_to_primary_keys(value, vendor_types.Vendor)
+    query_var = {
+        "lines__allocations__stock__warehouse\
+            __vendor_warehouse__vendor_id__pk__in": vendor_ids
+    }
+    return qs.filter(**query_var)
+    # qs.filter(variants__stocks__warehouse__pk__in=vendor_warehouse)
 
 
 def filter_created_range(qs, _, value):
@@ -129,6 +140,7 @@ class OrderFilter(DraftOrderFilter):
     created = ObjectTypeFilter(input_class=DateRangeInput, method=filter_created_range)
     search = django_filters.CharFilter(method=filter_order_search)
     channels = GlobalIDMultipleChoiceFilter(method=filter_channels)
+    vendor = GlobalIDMultipleChoiceFilter(method=filter_vendor_ids)
 
     class Meta:
         model = Order

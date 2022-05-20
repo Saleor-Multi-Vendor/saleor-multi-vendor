@@ -1,6 +1,7 @@
 from collections import defaultdict
 
 from django.db.models import F
+from django.http import HttpRequest
 
 from ...order.models import Fulfillment, FulfillmentLine, Order, OrderEvent, OrderLine
 from ...warehouse.models import Allocation
@@ -54,8 +55,23 @@ class OrderLineByIdLoader(DataLoader):
 class OrderLinesByOrderIdLoader(DataLoader):
     context_key = "orderlines_by_order"
 
+    def __init__(self, context, **kwargs):
+        self.vendor_ids = kwargs.get("vendor_ids")
+        super().__init__(context)
+
+    def __new__(cls, context: HttpRequest, **kwargs):
+        # cls.vendor_id = vendor_id
+        return super().__new__(cls, context)
+
     def batch_load(self, keys):
         lines = OrderLine.objects.filter(order_id__in=keys).order_by("pk")
+        # TODO: ***************** code here
+        query_var = {
+            "allocations__stock__warehouse\
+                __vendor_warehouse__vendor_id__pk__in": self.vendor_ids
+        }
+        if self.vendor_ids:
+            lines = lines.filter(**query_var)
         line_map = defaultdict(list)
         for line in lines.iterator():
             line_map[line.order_id].append(line)

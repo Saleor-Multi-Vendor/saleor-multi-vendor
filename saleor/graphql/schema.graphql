@@ -204,17 +204,6 @@ type Allocation implements Node {
   warehouse: Warehouse!
 }
 
-type AllocationCountableConnection {
-  pageInfo: PageInfo!
-  edges: [AllocationCountableEdge!]!
-  totalCount: Int
-}
-
-type AllocationCountableEdge {
-  node: Allocation!
-  cursor: String!
-}
-
 type App implements Node & ObjectWithMetadata {
   id: ID!
   name: String
@@ -4043,7 +4032,7 @@ type Order implements Node & ObjectWithMetadata {
   privateMetadata: [MetadataItem]!
   metadata: [MetadataItem]!
   fulfillments: [Fulfillment]!
-  lines: [OrderLine]!
+  lines(vendor: ID): [OrderLine]!
   actions: [OrderAction]!
   availableShippingMethods: [ShippingMethod]
   availableCollectionPoints: [Warehouse!]!
@@ -4346,6 +4335,7 @@ input OrderFilterInput {
   search: String
   metadata: [MetadataFilter]
   channels: [ID]
+  vendor: [ID]
 }
 
 type OrderFulfill {
@@ -6883,8 +6873,7 @@ type VariantPricingInfo {
 
 type Vendor implements Node {
   id: ID!
-  user: User
-  allocation(before: String, after: String, first: Int, last: Int): AllocationCountableConnection!
+  user: User!
   shopName: String!
   slug: String!
 }
@@ -6910,7 +6899,6 @@ input VendorCreateInput {
   slug: String
   shopName: String
   user: ID
-  allocation: [ID]
 }
 
 type VendorDelete {

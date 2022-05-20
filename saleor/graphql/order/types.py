@@ -74,6 +74,8 @@ from ..product.dataloaders import (
 from ..product.types import ProductVariant
 from ..shipping.dataloaders import ShippingMethodByIdLoader
 from ..shipping.types import ShippingMethod
+from ..utils import resolve_global_ids_to_primary_keys
+from ..vendor import types as vendor_types
 from ..warehouse.types import Allocation, Warehouse
 from .dataloaders import (
     AllocationsByOrderLineIdLoader,
@@ -601,7 +603,10 @@ class Order(CountableDjangoObjectType):
         Fulfillment, required=True, description="List of shipments for the order."
     )
     lines = graphene.List(
-        lambda: OrderLine, required=True, description="List of order lines."
+        lambda: OrderLine,
+        required=True,
+        description="List of order lines.",
+        vendor=graphene.ID(),
     )
     actions = graphene.List(
         OrderAction,
@@ -948,8 +953,16 @@ class Order(CountableDjangoObjectType):
         )
 
     @staticmethod
-    def resolve_lines(root: models.Order, info):
-        return OrderLinesByOrderIdLoader(info.context).load(root.id)
+    def resolve_lines(root: models.Order, info, **kwargs):
+        value = kwargs.get("vendor")
+        vendor_ids = None
+        if value:
+            _, vendor_ids = resolve_global_ids_to_primary_keys(
+                [value], vendor_types.Vendor
+            )
+        return OrderLinesByOrderIdLoader(info.context, vendor_ids=vendor_ids).load(
+            root.id
+        )
 
     @staticmethod
     @permission_required(OrderPermissions.MANAGE_ORDERS)
