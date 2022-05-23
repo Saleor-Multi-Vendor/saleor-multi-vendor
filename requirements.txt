@@ -134,7 +134,7 @@ sympy==1.8; python_version >= "3.6"
 text-unidecode==1.3
 threadloop==1.0.2; python_version >= "3.7"
 thrift==0.15.0; python_version >= "3.7"
-tinycss2==1.1.0; python_version >= "3.6"
+tinycss2==1.1.1; python_version >= "3.6"
 tornado==6.1; python_version >= "3.7"
 typing-extensions==3.10.0.2; python_version >= "3.6"
 typing-inspect==0.7.1; python_version >= "3.6"
