@@ -157,7 +157,7 @@ pytest-mock==3.6.1; python_version >= "3.6"
 pytest-vcr==1.0.2
 pytest-xdist==2.4.0; python_version >= "3.6"
 pytest==6.2.5; python_version >= "3.6"
-python-crontab==2.5.1
+python-crontab==2.6.0
 python-dateutil==2.8.2; python_version >= "3.6" and python_full_version < "3.0.0" or python_full_version >= "3.3.0" and python_version >= "3.6"
 python-dotenv==0.19.0; python_version >= "3.5"
 python-http-client==3.3.3; python_version >= "2.7" and python_full_version < "3.0.0" or python_full_version >= "3.5.0"
