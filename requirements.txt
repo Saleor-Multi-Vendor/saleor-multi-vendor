@@ -45,7 +45,7 @@ draftjs-sanitizer==1.0.0
 enmerkar==0.7.1
 et-xmlfile==1.1.0; python_version >= "3.6"
 faker==8.14.0; python_version >= "3.6"
-fonttools==4.27.1; python_version >= "3.6"
+fonttools==4.34.4; python_version >= "3.6"
 freezegun==1.1.0; python_version >= "3.5"
 google-api-core==2.0.1; python_version >= "3.6" and python_full_version < "3.0.0" or python_full_version >= "3.6.0" and python_version >= "3.6"
 google-auth==2.1.0; python_version >= "3.6" and python_full_version < "3.0.0" or python_full_version >= "3.6.0" and python_version >= "3.6"
