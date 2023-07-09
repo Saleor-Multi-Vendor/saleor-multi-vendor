@@ -46,8 +46,8 @@ from ..core.types import ChannelFilterInputObjectType, FilterInputObjectType
 from ..core.types.common import IntRangeInput, PriceRangeInput
 from ..utils import resolve_global_ids_to_primary_keys
 from ..utils.filters import filter_fields_containing_value, filter_range_field
-from ..warehouse import types as warehouse_types
 from ..vendor import types as vendor_types
+from ..warehouse import types as warehouse_types
 from . import types as product_types
 from .enums import (
     CollectionPublished,
@@ -518,11 +518,12 @@ def filter_product_type_kind(qs, _, value):
         qs = qs.filter(kind=value)
     return qs
 
+
 def filter_vendor_ids(qs, _, value):
-    _,vendor_ids = resolve_global_ids_to_primary_keys(
-        value,vendor_types.Vendor
-    )
-    vendor_warehouse = VendorWarehouse.objects.filter(vendor_id__pk__in=vendor_ids).values_list('warehouse',flat=True)
+    _, vendor_ids = resolve_global_ids_to_primary_keys(value, vendor_types.Vendor)
+    vendor_warehouse = VendorWarehouse.objects.filter(
+        vendor_id__pk__in=vendor_ids
+    ).values_list("warehouse", flat=True)
     print(vendor_warehouse)
     return qs.filter(variants__stocks__warehouse__pk__in=vendor_warehouse)
 

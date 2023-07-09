@@ -7,7 +7,7 @@
 
 #### There is no stable release yet. Get help on gitter chat.
 
-#### We are looking for contributors. Use issues to get an invite to organization. 
+#### We are looking for contributors. Use issues to get an invite to organization.
 
 Short Analysis:
 

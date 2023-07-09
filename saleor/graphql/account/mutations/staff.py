@@ -2,6 +2,7 @@ from collections import defaultdict
 from copy import copy
 
 import graphene
+from django.contrib.auth import password_validation
 from django.core.exceptions import ValidationError
 
 from ....account import events as account_events
@@ -55,6 +56,16 @@ class StaffCreateInput(StaffInput):
             "set the password. URL in RFC 1808 format."
         )
     )
+
+
+class StaffVendorCreateInput(StaffInput):
+    redirect_url = graphene.String(
+        description=(
+            "URL of a view where users should be redirected to "
+            "set the password. URL in RFC 1808 format."
+        )
+    )
+    password = graphene.String(description="Password.", required=True)
 
 
 class StaffUpdateInput(StaffInput):
@@ -258,6 +269,36 @@ class StaffCreate(ModelMutation):
         groups = cleaned_data.get("add_groups")
         if groups:
             instance.groups.add(*groups)
+
+
+class VendorStaffCreate(StaffCreate):
+    class Arguments:
+        input = StaffVendorCreateInput(
+            description="Fields required to create a staff user.", required=True
+        )
+
+    class Meta:
+        description = "Creates a new vendor staff user."
+        exclude = ["password"]
+        model = models.User
+        # permissions = (AccountPermissions.MANAGE_STAFF,)
+        error_type_class = StaffError
+        error_type_field = "staff_errors"
+
+    @classmethod
+    def clean_input(cls, info, instance, data):
+        password = data["password"]
+        try:
+            password_validation.validate_password(password, instance)
+        except ValidationError as error:
+            raise ValidationError({"password": error})
+        return super().clean_input(info, instance, data)
+
+    @classmethod
+    def save(cls, info, user, cleaned_input):
+        password = cleaned_input["password"]
+        user.set_password(password)
+        super().save(info, user, cleaned_input)
 
 
 class StaffUpdate(StaffCreate):

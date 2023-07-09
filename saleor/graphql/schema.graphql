@@ -4000,6 +4000,7 @@ type Mutation {
   permissionGroupCreate(input: PermissionGroupCreateInput!): PermissionGroupCreate
   permissionGroupUpdate(id: ID!, input: PermissionGroupUpdateInput!): PermissionGroupUpdate
   permissionGroupDelete(id: ID!): PermissionGroupDelete
+  vendorStaffCreate(input: StaffVendorCreateInput!): VendorStaffCreate
 }
 
 input NameTranslationInput {
@@ -6567,6 +6568,17 @@ input StaffUserInput {
   search: String
 }
 
+input StaffVendorCreateInput {
+  firstName: String
+  lastName: String
+  email: String
+  isActive: Boolean
+  note: String
+  addGroups: [ID!]
+  redirectUrl: String
+  password: String!
+}
+
 type Stock implements Node {
   warehouse: Warehouse!
   productVariant: ProductVariant!
@@ -6945,6 +6957,12 @@ enum VendorSortField {
 input VendorSortingInput {
   direction: OrderDirection!
   field: VendorSortField!
+}
+
+type VendorStaffCreate {
+  staffErrors: [StaffError!]! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `errors` field instead.")
+  errors: [StaffError!]!
+  user: User
 }
 
 type VendorUpdate {

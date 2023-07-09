@@ -56,6 +56,7 @@ from .mutations.staff import (
     StaffUpdate,
     UserAvatarDelete,
     UserAvatarUpdate,
+    VendorStaffCreate,
 )
 from .resolvers import (
     resolve_address,
@@ -245,3 +246,5 @@ class AccountMutations(graphene.ObjectType):
     permission_group_create = PermissionGroupCreate.Field()
     permission_group_update = PermissionGroupUpdate.Field()
     permission_group_delete = PermissionGroupDelete.Field()
+
+    vendor_staff_create = VendorStaffCreate.Field()
